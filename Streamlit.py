@@ -24,10 +24,10 @@ if 'logged_in' not in st.session_state:
 MIN_ATTENDANCES_FOR_RANKING = 1 # Contagem mínima de atendimentos para rankings de prestador/segmento/seguradora
 MIN_ATTENDANCES_FOR_CITY_ANALYSIS = 10 # Atendimentos mínimos padrão para análise de cidade em Capilaridade
 ALL_OPTION = "TODOS" # Constante para a opção "TODOS" nos filtros
-PROCESSED_ATENDIMENTOS_FILE_PATH = 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_atendimentos.parquet'
+ATENDIMENTO_FILE_PATH = 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_atendimentos.parquet'
 PROCESSED_CAPILARIDADE_FILE_PATH = 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_capilaridade_cidade.parquet'
-PROCESSED_FINANCEIRO_FILE_PATH = 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_financeiro.parquet'
-
+FINANCIAL_KPI_FILE = 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_financeiro.parquet'
+PS_FILE_PATH = 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_capilaridade_cidade.parquet'
 
 # --- Função da Página de Login ---
 def login_page():
