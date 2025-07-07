@@ -37,7 +37,7 @@ def login_page():
         # Caminho da imagem no servidor em produção pode ser diferente
         # Centralizando a imagem usando markdown e HTML
         st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
-        st.image("C:\\Temp\\logo.png", use_container_width=False, width=1600)
+        st.image("https://github.com/vinikrebs/ScrorePrestador/raw/main/logo.png", use_container_width=False, width=1600)
         st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -1210,7 +1210,7 @@ def page_qualidade_nps(df):
     inject_css()
 
     st.sidebar.title("Opções de Filtro")
-    st.sidebar.image("C:\\Temp\\logo.png", use_container_width=False, width=1000)
+    st.sidebar.image("https://github.com/vinikrebs/ScrorePrestador/raw/main/logo.png", use_container_width=False, width=1000)
     st.sidebar.markdown("---")
     st.sidebar.subheader("Filtros de Dados")
 
@@ -1390,7 +1390,7 @@ def main():
             "<h2 style='color: #000000; text-align: center; font-size: 1.5rem;'>Score do Prestador</h2>",
             unsafe_allow_html=True
         )
-        st.sidebar.image("C:\\Temp\\logo.png", use_container_width=False, width=1000)
+        st.sidebar.image("https://github.com/vinikrebs/ScrorePrestador/raw/main/logo.png", use_container_width=False, width=1000)
 
         with st.sidebar:
             selected_page = option_menu(
