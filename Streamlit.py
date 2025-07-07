@@ -27,7 +27,7 @@ ALL_OPTION = "TODOS" # Constante para a opção "TODOS" nos filtros
 ATENDIMENTO_FILE_PATH = 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_atendimentos.parquet'
 PROCESSED_CAPILARIDADE_FILE_PATH = 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_capilaridade_cidade.parquet'
 FINANCIAL_KPI_FILE = 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_financeiro.parquet'
-PS_FILE_PATH = 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_capilaridade_cidade.parquet'
+NPS_FILE_PATH = 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_capilaridade_cidade.parquet'
 
 # --- Função da Página de Login ---
 def login_page():
