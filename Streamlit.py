@@ -1164,18 +1164,11 @@ def page_qualidade(df_quality_kpis):
         )
     st.markdown("**Sugestão:** Avaliar treinamentos específicos ou programas de mentoria para prestadores com baixo NPS. Reconhecer e aprender com os de alto desempenho.")
 
-# Assume these are defined elsewhere in your code, or define them here for this example
-MIN_ATTENDANCES_FOR_RANKING = 10  # Example value
 def calculate_prestador_score(df):
     if df.empty:
         df['score_prestador'] = []
         df['status_score'] = []
         return df
-
-    # Ensure these columns exist before calculating.
-    # If 'nps_score_calculado' doesn't exist, use 'media_nps' from aggregation directly.
-    # The error message implies 'nps_score_calculado' is expected earlier.
-    # Let's use the aggregated 'media_nps' and others.
 
     # Normalize metrics. Assuming higher is better for NPS and lower is better for others.
     # You'll need actual normalization logic if you want a precise score.
@@ -1191,7 +1184,23 @@ def calculate_prestador_score(df):
     df['score_prestador'] = (df['score_prestador'] - df['score_prestador'].min()) / (df['score_prestador'].max() - df['score_prestador'].min()) * 100
     
     # Classify based on quartiles for status, even if we remove the chart, it might be used by suggestions
-    df['status_score'] = pd.qcut(df['score_prestador'], 4, labels=['Precisa de Atenção', 'Regular', 'Bom', 'Excelente'], duplicates='drop')
+    # --- INÍCIO DA MUDANÇA PARA TRATAR O ERRO ---
+    if df['score_prestador'].nunique() < 4:
+        # Se não há valores únicos suficientes para 4 quartis, use uma lógica alternativa.
+        # Por exemplo, classificar todos como "Regular" ou definir limiares fixos.
+        # Aqui, vou definir um limite simples se houver poucos valores únicos.
+        # Você pode ajustar essa lógica conforme a distribuição real dos seus scores.
+        if df['score_prestador'].nunique() == 0:
+            df['status_score'] = 'N/A' # Ou outra classificação padrão
+        elif df['score_prestador'].nunique() == 1:
+            df['status_score'] = 'Regular' # Ou o que fizer sentido para um score único
+        else: # Se houver 2 ou 3 valores únicos, podemos tentar 2 ou 3 quartis ou usar pd.cut
+            # Para este exemplo, vamos simplificar para dois grupos se menos de 4 únicos
+            df['status_score'] = pd.qcut(df['score_prestador'], 2, labels=['Precisa de Atenção', 'Excelente'], duplicates='drop')
+    else:
+        # Se houver valores únicos suficientes, use qcut normalmente
+        df['status_score'] = pd.qcut(df['score_prestador'], 4, labels=['Precisa de Atenção', 'Regular', 'Bom', 'Excelente'], duplicates='drop')
+    # --- FIM DA MUDANÇA ---
     
     return df
 
@@ -1270,7 +1279,7 @@ def page_score_prestador(df):
     col_kpi5.metric("Média % Intermediação", f"{df_prestadores_scored['pct_intermediacao'].mean():.2f}%") # New KPI
     col_kpi6.metric("Média Score Prestador", f"{df_prestadores_scored['score_prestador'].mean():.2f}")
 
-   
+    
 
     st.markdown("---")
     st.subheader("Prestadores com Necessidade de Atenção")
@@ -1327,7 +1336,7 @@ def page_score_prestador(df):
     else:
         st.info("Nenhum prestador identificado com necessidade de atenção com base nos critérios atuais.")
 
-   
+    
 
     st.markdown("---")
     st.subheader("Todos os Prestadores por Score")
