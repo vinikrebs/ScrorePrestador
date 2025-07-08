@@ -144,10 +144,10 @@ def load_and_prepare_data(atendimentos_file_path, nps_file_path):
 
 
     except FileNotFoundError:
-    #    st.warning(f"Aviso: Arquivo NPS '{nps_file_path}' não encontrado. A análise de qualidade será limitada.")
+        st.warning(f"Aviso: Arquivo NPS '{nps_file_path}' não encontrado. A análise de qualidade será limitada.")
         df_final['nps_score_calculado'] = np.nan
     #except Exception as e:
-    #    st.warning(f"Aviso ao ler o arquivo NPS Parquet: {e}. A análise de qualidade pode estar incompleta.")
+        st.warning(f"Aviso ao ler o arquivo NPS Parquet: {e}. A análise de qualidade pode estar incompleta.")
         df_final['nps_score_calculado'] = np.nan
 
 
