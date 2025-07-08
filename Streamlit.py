@@ -137,10 +137,10 @@ def load_and_prepare_data(atendimentos_file_path, nps_file_path):
 
         # As colunas já devem vir processadas do data_processor.py
         # Apenas garantir a existência das colunas para a fusão.
-        #if 'nps_score_calculado' not in df_nps.columns:
-        #    st.warning(f"Aviso: Coluna 'nps_score_calculado' não encontrada em '{nps_file_path}'. A análise de qualidade será limitada.")
-        #   df_final['nps_score_calculado'] = np.nan
-       #   return df_final
+        if 'nps_score_calculado' not in df_nps.columns:
+            st.warning(f"Aviso: Coluna 'nps_score_calculado' não encontrada em '{nps_file_path}'. A análise de qualidade será limitada.")
+            df_final['nps_score_calculado'] = np.nan
+        return df_final
 
 
     except FileNotFoundError:
