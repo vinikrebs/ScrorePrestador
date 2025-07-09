@@ -24,10 +24,11 @@ if 'logged_in' not in st.session_state:
 MIN_ATTENDANCES_FOR_RANKING = 1 # Contagem mínima de atendimentos para rankings de prestador/segmento/seguradora
 MIN_ATTENDANCES_FOR_CITY_ANALYSIS = 10 # Atendimentos mínimos padrão para análise de cidade em Capilaridade
 ALL_OPTION = "TODOS" # Constante para a opção "TODOS" nos filtros
-ATENDIMENTO_FILE_PATH = 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_atendimentos.parquet'
-PROCESSED_CAPILARIDADE_FILE_PATH = 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_capilaridade_cidade.parquet'
-FINANCIAL_KPI_FILE = 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_financeiro.parquet'
-NPS_FILE_PATH = 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_capilaridade_cidade.parquet'
+FINANCIAL_KPI_FILE = "C:\\Temp\\processed_financeiro.parquet"
+ATENDIMENTO_FILE_PATH = 'C:\\Temp\\processed_atendimentos.parquet'
+NPS_CIDADE_PATH = "C:\Temp\processed_nps_by_city.parquet"
+NPS_PRESTADOR_PATH = "C:\Temp\processed_nps_by_provider.parquet"
+LOGO_PATH = "C:\\Temp\\logo.png"
 
 # --- Função da Página de Login ---
 def login_page():
@@ -37,7 +38,7 @@ def login_page():
         # Caminho da imagem no servidor em produção pode ser diferente
         # Centralizando a imagem usando markdown e HTML
         st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
-        st.image("https://github.com/vinikrebs/ScrorePrestador/raw/main/logo.png", use_container_width=False, width=1600)
+        st.image(LOGO_PATH, use_container_width=False, width=1600)
         st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -72,17 +73,12 @@ def login_page():
 
 # --- Função de Carregamento e Preparação de Dados (com cache para performance) ---
 @st.cache_data
-def load_and_prepare_data(atendimentos_file_path, nps_file_path):
-    """
-    Carrega e pré-processa dados, realizando limpeza e conversão de tipo.
-    Integra dados de NPS.
-    """
+def load_and_prepare_data(atendimentos_file_path, nps_cidade_path, nps_prestador_path):
     pd.set_option('future.no_silent_downcasting', True)
 
+    # Carrega e processa df_final
     try:
-        # Alterado para ler arquivo Parquet
-        df = pd.read_parquet(atendimentos_file_path)
-
+        df_final = pd.read_parquet(atendimentos_file_path)
     except FileNotFoundError:
         st.error(f"Erro: Arquivo '{atendimentos_file_path}' não encontrado. Verifique o caminho.")
         st.stop()
@@ -90,25 +86,13 @@ def load_and_prepare_data(atendimentos_file_path, nps_file_path):
         st.error(f"Erro ao ler o arquivo Parquet de atendimentos: {e}. Verifique se o arquivo está no formato correto.")
         st.stop()
 
-    def normalize_string(text):
-        if pd.isna(text):
-            return ''
-        text = str(text)
-        text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('utf-8')
-        return text.lower().replace(' ', '_').replace('.', '')
-
-    # As colunas já devem estar normalizadas se vierem do data_processor
-    # df.columns = [normalize_string(col) for col in df.columns] # Comentar ou remover se já normalizado
-
-    # A lógica de data e preenchimento de NaNs deve ser feita no data_processor
-    # Apenas garantir que as colunas importantes estão no tipo correto
-    if 'data_abertura_atendimento' in df.columns:
-        df['data_abertura_atendimento'] = pd.to_datetime(df['data_abertura_atendimento'], errors='coerce')
+    if 'data_abertura_atendimento' in df_final.columns:
+        df_final['data_abertura_atendimento'] = pd.to_datetime(df_final['data_abertura_atendimento'], errors='coerce')
     else:
-        st.error("Coluna 'data_abertura_atendimento' não encontrada no DataFrame processado.")
+        st.error("Coluna 'data_abertura_atendimento' não encontrada no DataFrame de atendimentos.")
         st.stop()
 
-    df_final = df.dropna(subset=['data_abertura_atendimento']).copy()
+    df_final = df_final.dropna(subset=['data_abertura_atendimento']).copy()
 
     for col in ['segmento', 'seguradora', 'uf', 'municipio', 'nome_do_prestador', 'protocolo_atendimento']:
         if col in df_final.columns:
@@ -128,175 +112,49 @@ def load_and_prepare_data(atendimentos_file_path, nps_file_path):
         df_final['tempo_chegada_min'] = df_final['tempo_chegada_min'].astype(float)
     if 'val_total_items' in df_final.columns:
         df_final['val_total_items'] = df_final['val_total_items'].astype(float)
-
-
-    # --- CORREÇÃO: Integração de Dados de NPS (agora lendo parquet) ---
+    
+    # --- Carrega e processa df_nps_cidade ---
     try:
-        # Alterado para ler arquivo Parquet
-        df_nps = pd.read_parquet(nps_file_path)
-
-        # As colunas já devem vir processadas do data_processor.py
-        # Apenas garantir a existência das colunas para a fusão.
-        if 'nps_score_calculado' not in df_nps.columns:
-            st.warning(f"Aviso: Coluna 'nps_score_calculado' não encontrada em '{nps_file_path}'. A análise de qualidade será limitada.")
-            df_final['nps_score_calculado'] = np.nan
-            return df_final
-
-
+        df_nps_cidade = pd.read_parquet(nps_cidade_path)
+        # Ajustar tipos e lidar com NaNs nas colunas de NPS
+        for col in ['nps_score_calculado', 'nps_promotores', 'nps_neutros', 'nps_detratores']:
+            if col in df_nps_cidade.columns:
+                df_nps_cidade[col] = pd.to_numeric(df_nps_cidade[col], errors='coerce').fillna(0) # Trata ' ' como NaN e preenche com 0
+        if 'mes_ano' in df_nps_cidade.columns:
+             df_nps_cidade['mes_ano'] = pd.to_datetime(df_nps_cidade['mes_ano'], errors='coerce').dt.to_period('M')
+        else:
+             st.warning("Coluna 'mes_ano' não encontrada no arquivo NPS por cidade.")
     except FileNotFoundError:
-    #    st.warning(f"Aviso: Arquivo NPS '{nps_file_path}' não encontrado. A análise de qualidade será limitada.")
-        df_final['nps_score_calculado'] = np.nan
-    #except Exception as e:
-    #    st.warning(f"Aviso ao ler o arquivo NPS Parquet: {e}. A análise de qualidade pode estar incompleta.")
-        df_final['nps_score_calculado'] = np.nan
+        st.warning(f"Aviso: Arquivo '{nps_cidade_path}' não encontrado. A análise de NPS por cidade pode estar incompleta.")
+        df_nps_cidade = pd.DataFrame() # Retorna DataFrame vazio para evitar erros
+    except Exception as e:
+        st.error(f"Erro ao ler o arquivo Parquet de NPS por cidade: {e}.")
+        df_nps_cidade = pd.DataFrame()
 
+    # --- Carrega e processa df_nps_prestador ---
+    try:
+        df_nps_prestador = pd.read_parquet(nps_prestador_path)
+        # Ajustar tipos e lidar com NaNs nas colunas de NPS
+        for col in ['nps_score_calculado', 'nps_promotores', 'nps_neutros', 'nps_detratores']:
+            if col in df_nps_prestador.columns:
+                df_nps_prestador[col] = pd.to_numeric(df_nps_prestador[col], errors='coerce').fillna(0) # Trata ' ' como NaN e preenche com 0
+        if 'mes_ano' in df_nps_prestador.columns:
+            df_nps_prestador['mes_ano'] = pd.to_datetime(df_nps_prestador['mes_ano'], errors='coerce').dt.to_period('M')
+        else:
+            st.warning("Coluna 'mes_ano' não encontrada no arquivo NPS por prestador.")
+    except FileNotFoundError:
+        st.warning(f"Aviso: Arquivo '{nps_prestador_path}' não encontrado. A análise de NPS por prestador pode estar incompleta.")
+        df_nps_prestador = pd.DataFrame() # Retorna DataFrame vazio para evitar erros
+    except Exception as e:
+        st.error(f"Erro ao ler o arquivo Parquet de NPS por prestador: {e}.")
+        df_nps_prestador = pd.DataFrame()
 
-    # Criação de novas colunas de tempo (se ainda não existirem do processamento)
-    if 'mes_ano_abertura' not in df_final.columns:
-        df_final['mes_ano_abertura'] = df_final['data_abertura_atendimento'].dt.to_period('M').astype(str)
-    if 'dia_da_semana' not in df_final.columns:
-        df_final['dia_da_semana'] = df_final['data_abertura_atendimento'].dt.day_name(locale='pt_BR')
-    if 'hora_do_dia' not in df_final.columns:
-        df_final['hora_do_dia'] = df_final['data_abertura_atendimento'].dt.hour
-    if 'periodo_do_dia' not in df_final.columns:
-        df_final['periodo_do_dia'] = df_final['hora_do_dia'].apply(
-            lambda x: 'Manhã' if 6 <= x < 12 else ('Tarde' if 12 <= x < 18 else ('Noite' if 18 <= x < 24 else 'Madrugada'))
-        )
-
-    return df_final
-
-
-
-df_atendimentos = load_and_prepare_data(ATENDIMENTO_FILE_PATH, NPS_FILE_PATH)
-
-if df_atendimentos.empty:
-    st.error("Nenhum dado válido disponível após o pré-processamento. Verifique seus arquivos Parquet e o formato das colunas.")
-    st.stop()
-
-# --- CSS para Filtros da Barra Lateral e Estilo do DataFrame ---
-def inject_css():
-    st.markdown("""
-    <style>
-    /* Estilo geral da barra lateral */
-    div[data-testid="stSidebar"] {
-        font-family: "Inter", sans-serif;
-    }
-    div[data-testid="stSidebar"] h2 {
-        color: #2021D4;
-        font-weight: bold;
-        margin-top: 0.5rem !important; /* Reduce top margin */
-        margin-bottom: 0.5rem !important; /* Reduce bottom margin */
-    }
-    div[data-testid="stSidebar"] label {
-        color: #333333;
-        font-weight: normal;
-    }
-
-    /* Ajustar o gap entre elementos dentro da barra lateral */
-    div[data-testid="stSidebar"] .stVerticalBlock {
-        gap: 0.5rem; /* Adjust this value to control spacing */
-    }
-
-    /* Bordas e cores do MultiSelect, DateInput, NumberInput */
-    div[data-testid="stSidebar"] .stMultiSelect div[data-baseweb="select"],
-    div[data-testid="stSidebar"] .stDateInput input[type="text"],
-    div[data-testid="stSidebar"] .stNumberInput input[type="number"] {
-        border: 1px solid #2021D4 !important;
-        border-radius: 5px;
-        color: #333333;
-    }
-
-    /* Tags do MultiSelect */
-    div[data-testid="stSidebar"] .stMultiSelect div[data-baseweb="tag"] {
-        background-color: #2021D4 !important;
-        color: white !important;
-        border-radius: 5px;
-    }
-
-    /* Estado de foco para inputs */
-    div[data-testid="stSidebar"] input:focus {
-        border-color: #2021D1 !important;
-        box-shadow: 0 0 0 0.2rem rgba(32, 33, 212, 0.25) !important;
-    }
-
-    /* Estilo do Popover (dropdowns) */
-    div[data-baseweb="popover"] > div > div {
-        background-color: #FFFFFF !important;
-        border: 1px solid #2021D4 !important;
-        border-radius: 5px;
-    }
-    div[data-baseweb="popover"] ul > li {
-        color: #333333 !important;
-    }
-    div[data-baseweb="popover"] ul > li:hover {
-        background-color: #E6F0F8 !important;
-        color: #333333 !important;
-    }
-
-    /* Ajustar largura da barra lateral se necessário (exemplo) */
-    .st-emotion-cache-1uj76pr {
-        flex: 3;
-    }
-
-    /* Specific for the image in the sidebar */
-    div[data-testid="stSidebar"] .stImage {
-        margin-top: 0rem !important;
-        margin-bottom: 0rem !important;
-    }
-
-    /* Specific for markdown separators (---) to reduce their margins */
-    div[data-testid="stSidebar"] .st-emotion-cache-1cypf8t { /* This targets the divider line */
-        margin-top: 0.5rem !important;
-        margin-bottom: 0.5rem !important;
-    }
-
-    /* Estilo para o expander de "dica" */
-    div[data-testid="stExpander"] > div[role="button"] {
-        background-color: #E6F0F8; /* Light blue background */
-        border-left: 5px solid #2021D4; /* Blue left border */
-        color: #2021D4; /* Dark blue text */
-        font-weight: bold;
-        padding: 10px 15px;
-        border-radius: 5px;
-        cursor: pointer;
-        transition: background-color 0.3s;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.1); /* Soft shadow for a button-like feel */
-    }
-    div[data-testid="stExpander"] > div[role="button"]:hover {
-        background-color: #DDEBF7; /* Slightly darker on hover */
-    }
-    div[data-testid="stExpander"] .st-emotion-cache-p5mxxl { /* This targets the expander caret icon */
-        color: #2021D4 !important;
-    }
-
-    /* Estilo Geral do DataFrame para melhor legibilidade */
-    .dataframe {
-        font-family: "Inter", sans-serif;
-        font-size: 14px;
-        border-collapse: collapse;
-        width: 100%;
-    }
-    .dataframe th {
-        background-color: #2021D4;
-        color: white;
-        padding: 8px;
-        text-align: left;
-        border-bottom: 2px solid #ddd;
-    }
-    .dataframe td {
-        padding: 8px;
-        border-bottom: 1px solid #eee;
-    }
-    .dataframe tr:hover {
-        background-color: #f5f5f5;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    return df_final, df_nps_cidade, df_nps_prestador,
 
 # --- Função Geral de Aplicação de Filtros ---
 def apply_filters(df, selected_segments, selected_insurers, selected_states, selected_municipios, start_date, end_date):
     """Aplica filtros comuns ao DataFrame."""
-    df_filtered = df[
+    df_filtrado = df[
         (df['segmento'].isin(selected_segments)) &
         (df['seguradora'].isin(selected_insurers)) &
         (df['uf'].isin(selected_states)) &
@@ -304,7 +162,7 @@ def apply_filters(df, selected_segments, selected_insurers, selected_states, sel
         (df['data_abertura_atendimento'].dt.date >= start_date) &
         (df['data_abertura_atendimento'].dt.date <= end_date)
     ].copy()
-    return df_filtered
+    return df_filtrado
 
 # --- Funções para Páginas (Pilares) ---
 def page_informacao():
@@ -314,7 +172,7 @@ def page_informacao():
 
     **Bem-vindo ao Dashboard de Monitoramento Inteligente da Rede de Prestadores A24h!** Esta plataforma foi desenhada para transformar dados complexos em *insights acionáveis*, permitindo decisões ágeis e estratégicas para otimizar performance, reduzir custos e garantir a melhor experiência para nossos clientes.
 
-    👉 **Explore os pilares abaixo** e descubra diferentes perspectivas da nossa rede de parceiros:
+    **Explore os pilares abaixo** e descubra diferentes perspectivas da nossa rede de parceiros:
 
     ---
     """)
@@ -323,7 +181,7 @@ def page_informacao():
     st.markdown("""
     Monitora a **distribuição** e a **disponibilidade** dos prestadores em relação à demanda da região.
 
-    ✅ **Por que é importante?** Ajuda a identificar áreas descobertas, equilibrar recursos e evitar sobrecarga em determinados prestadores.
+    **Objetivo:** Ajuda a identificar áreas descobertas, equilibrar recursos e evitar sobrecarga em determinados prestadores.
     """)
 
     st.subheader("Indicadores de Capilaridade")
@@ -348,7 +206,7 @@ def page_informacao():
     st.markdown("""
     Analisa a **eficiência econômica** da rede e o impacto no custo médio por serviço (CMS).
 
-    ✅ **Por que é importante?** Permite controlar custos, identificar oportunidades de economia e evitar distorções regionais.
+    **Objetivo:** Permite controlar custos, identificar oportunidades de economia e evitar distorções regionais.
     """)
 
     st.subheader("Indicadores Financeiros")
@@ -371,7 +229,7 @@ def page_informacao():
     st.markdown("""
     Acompanha o quanto os serviços estão sendo utilizados por apólice em cada região.
 
-    ✅ **Por que é importante?** Ajuda a identificar padrões de uso, prever demandas futuras e gerenciar melhor a capacidade da rede.
+    **Objetivo:** Ajuda a identificar padrões de uso, prever demandas futuras e gerenciar melhor a capacidade da rede.
     """)
 
     st.subheader("Indicadores de Frequência de Uso")
@@ -388,7 +246,7 @@ def page_informacao():
     st.markdown("""
     Avalia a **satisfação do cliente** e a **qualidade do serviço entregue**.
 
-    ✅ **Por que é importante?** Monitora o nível de confiança do cliente e identifica oportunidades de melhoria.
+    **Objetivo:** Monitora o nível de confiança do cliente e identifica oportunidades de melhoria.
     """)
 
     st.subheader("Indicadores de Qualidade")
@@ -423,85 +281,10 @@ def page_informacao():
     st.info("Utilize o menu na barra lateral para navegar por cada pilar. Cada seção oferece filtros detalhados para uma análise personalizada.")
 
 
-def display_capilaridade_kpis(df_filtered, df_agregado_cidade_com_indice=None):
-    """Exibe os principais indicadores de desempenho para Capilaridade."""
-    st.markdown("---")
-    st.header("KPIs Gerais de Capilaridade")
-    total_servicos = len(df_filtered)
-    total_prestadores_unicos = df_filtered['nome_do_prestador'].nunique()
-    total_cidades_atendidas = df_filtered['municipio'].nunique()
-    media_tempo_chegada = df_filtered['tempo_chegada_min'].mean()
-    pct_reembolso = (df_filtered['is_reembolso'].sum() / total_servicos) * 100 if total_servicos > 0 else 0
-    pct_intermediacao = (df_filtered['is_intermediacao'].sum() / total_servicos) * 100 if total_servicos > 0 else 0
-
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
-    col1.metric("Total de Serviços", f"{total_servicos:,}".replace(',', '.'), help="Número total de atendimentos registrados com os filtros aplicados.")
-    col2.metric("Prestadores Únicos", f"{total_prestadores_unicos:,}".replace(',', '.'), help="Número de prestadores distintos que realizaram atendimentos com os filtros aplicados.")
-    col3.metric("Cidades Atendidas", f"{total_cidades_atendidas:,}".replace(',', '.'), help="Número de municípios onde houve atendimentos com os filtros aplicados.")
-    col4.metric("TMC (min)", f"{media_tempo_chegada:.0f} min" if not pd.isna(media_tempo_chegada) else "N/A", help="Tempo Médio de Chegada do prestador ao local do serviço, em minutos.")
-    col5.metric("Perc. Reembolso", f"{pct_reembolso:.2f}%", help="Percentual de serviços que geraram algum tipo de reembolso, indicando falha na cobertura direta ou preferência do cliente.")
-    col6.metric("Perc. Intermediação", f"{pct_intermediacao:.2f}%", help="Percentual de serviços que foram realizados por meio de intermediação, e não por prestadores diretos da rede.")
-
-    # --- GRÁFICO DE CAPILARIDADE ---
-    if df_agregado_cidade_com_indice is not None and not df_agregado_cidade_com_indice.empty:
-        st.markdown("---")
-        st.header("Dispersão de Capilaridade por Cidade")
-        st.info("Visualize a relação entre o número de serviços e a quantidade de prestadores. Círculos maiores indicam maior volume de atendimentos. As cores representam o status de capilaridade da cidade.")
-
-        category_order = ['Carência Assistencial', 'Capilaridade Regular', 'Boa Capilaridade']
-        status_colors = {
-            'Carência Assistencial': '#EF5350',  # Red
-            'Capilaridade Regular': '#FFCA28',    # Amber
-            'Boa Capilaridade': '#66BB6A'        # Green
-        }
-
-        # Create the scatter plot
-        fig_capilaridade = px.scatter(
-            df_agregado_cidade_com_indice,
-            x='num_servicos',
-            y='num_prestadores',
-            color='status_capilaridade',
-            size='num_servicos', # Size of markers based on number of services
-            hover_name='municipio',
-            hover_data={
-                'uf': True,
-                'num_servicos': ':.0f',
-                'num_prestadores': ':.0f',
-                'indice_capilaridade': ':.2f',
-                'status_capilaridade': True,
-                'pct_reembolso': ':.2f',
-                'pct_intermediacao': ':.2f',
-                'media_tempo_chegada': ':.0f'
-            },
-            title='Capilaridade: Serviços vs. Prestadores por Cidade e Status',
-            labels={
-                'num_servicos': 'Número de Serviços (Atendimentos)',
-                'num_prestadores': 'Número de Prestadores',
-                'status_capilaridade': 'Status de Capilaridade'
-            },
-            color_discrete_map=status_colors,
-            category_orders={'status_capilaridade': category_order},
-            height=600,
-            log_x=True, # Apply log scale to x-axis
-            )
-
-        fig_capilaridade.update_layout(
-            xaxis_title="Número de Serviços (Atendimentos)",
-            yaxis_title="Número de Prestadores",
-            legend_title="Status de Capilaridade",
-            hovermode="closest",
-            yaxis=dict(showgrid=False)  # Remove y-axis grid lines
-        )
-        
-        st.plotly_chart(fig_capilaridade, use_container_width=True)
-
-
 def calculate_capilaridade_index(df_agregado_cidade):
-    """Calcula o Índice de Capilaridade e seu status."""
     if df_agregado_cidade.empty:
         return pd.DataFrame()
 
-    # Handle potential division by zero for max()
     max_servicos = df_agregado_cidade['num_servicos'].max()
     df_agregado_cidade['norm_atendimentos'] = df_agregado_cidade['num_servicos'] / max_servicos if max_servicos > 0 else 0
     
@@ -536,15 +319,17 @@ def calculate_capilaridade_index(df_agregado_cidade):
             q1 = df_agregado_cidade['indice_capilaridade'].quantile(0.25)
             q3 = df_agregado_cidade['indice_capilaridade'].quantile(0.75)
             
-            # Ensure bins are unique and correctly ordered
-            # Add small epsilon to max to ensure all values fall into a bin
-            bins = sorted(list(set([df_agregado_cidade['indice_capilaridade'].min() - 0.001, q1, q3, df_agregado_cidade['indice_capilaridade'].max() + 0.001])))
+            bins = sorted(list(set([
+                df_agregado_cidade['indice_capilaridade'].min() - 0.001, 
+                q1, 
+                q3, 
+                df_agregado_cidade['indice_capilaridade'].max() + 0.001
+            ])))
             
             labels_map = {
                 2: ['Carência Assistencial', 'Boa Capilaridade'],
                 3: ['Carência Assistencial', 'Capilaridade Regular', 'Boa Capilaridade']
             }
-            # Use the most appropriate labels based on the number of unique bins created
             labels = labels_map.get(len(bins) - 1, ['Capilaridade Regular']) 
 
             df_agregado_cidade['status_capilaridade'] = pd.cut(
@@ -554,10 +339,8 @@ def calculate_capilaridade_index(df_agregado_cidade):
                 right=True,
                 duplicates='drop'
             )
-            # Fill any NaN created by pd.cut (e.g., if a value falls exactly on a boundary not covered by 'right=True')
             df_agregado_cidade['status_capilaridade'] = df_agregado_cidade['status_capilaridade'].fillna('Capilaridade Regular')
             
-            # Ensure the categories are set correctly for plotting order
             df_agregado_cidade['status_capilaridade'] = pd.Categorical(
                 df_agregado_cidade['status_capilaridade'],
                 categories=['Carência Assistencial', 'Capilaridade Regular', 'Boa Capilaridade'],
@@ -567,24 +350,15 @@ def calculate_capilaridade_index(df_agregado_cidade):
         df_agregado_cidade['status_capilaridade'] = 'N/A'
     return df_agregado_cidade
 
-
 def get_sugestao_acao(row, df_agregado_cidade, min_atendimentos_cidade):
-    """Gera sugestões de ação com base no desempenho da cidade."""
     sugestoes = set()
     if row['status_capilaridade'] == 'Carência Assistencial':
         sugestoes.add("Recrutamento urgente de prestadores. Analisar concorrência local.")
     
-    # Check for empty prestadores only if services > 0
     if row['num_servicos'] > 0 and row['num_prestadores'] == 0:
         sugestoes.add("Ausência de prestadores. Foco total em parceria local.")
     
-    # Only provide suggestions for cities above min_atendimentos_cidade
-    if row['num_servicos'] >= min_atendimentos_cidade:
-        # Calculate percentiles for each metric excluding current row to avoid self-influence,
-        # or use overall percentiles if data is large enough. For simplicity here,
-        # we'll use overall for now, but in a real scenario, robust percentiles are better.
-        
-        # Ensure there are enough unique values to calculate quantiles
+    if row['num_servicos'] >= min_atendimentos_cidade: 
         if df_agregado_cidade['pct_reembolso'].nunique() > 1:
             pct_reembolso_80 = df_agregado_cidade['pct_reembolso'].quantile(0.80)
             if row['pct_reembolso'] > pct_reembolso_80:
@@ -603,7 +377,6 @@ def get_sugestao_acao(row, df_agregado_cidade, min_atendimentos_cidade):
     return " | ".join(sorted(list(sugestoes))) if sugestoes else "Nenhuma sugestão específica."
 
 def display_specific_problem_rankings(df_agregado_cidade):
-    """Exibe os rankings para cidades com problemas específicos, como alto reembolso ou intermediação."""
     st.markdown("---")
     st.header("Classificações de Problemas Específicos")
     st.markdown("Cidades com os maiores desafios em reembolso e intermediação.")
@@ -612,6 +385,9 @@ def display_specific_problem_rankings(df_agregado_cidade):
     
     with col_reembolso_rank:
         st.subheader("Cidades por % de Reembolso")
+        if 'total_valor_servicos' not in df_agregado_cidade.columns:
+            df_agregado_cidade['total_valor_servicos'] = 0 
+        
         df_reembolso_rank = df_agregado_cidade.sort_values('pct_reembolso', ascending=False).head(10).copy()
         
         df_reembolso_rank_display = df_reembolso_rank.rename(columns={
@@ -633,29 +409,105 @@ def display_specific_problem_rankings(df_agregado_cidade):
     
     with col_intermediacao_rank:
         st.subheader("Cidades por % de Intermediação")
+        if 'total_valor_servicos' not in df_agregado_cidade.columns:
+            df_agregado_cidade['total_valor_servicos'] = 0 
+
         df_intermediacao_rank = df_agregado_cidade.sort_values('pct_intermediacao', ascending=False).head(10).copy()
         
         df_intermediacao_rank_display = df_intermediacao_rank.rename(columns={
             'municipio': 'Cidade',
             'uf': 'UF',
             'num_servicos': 'Qtd. Serviços',
-            'pct_intermediacao': '% Intermediação', # This is where it's correctly defined with "ção"
+            'pct_intermediacao': '% Intermediação',
             'total_valor_servicos': 'Valor Total'
         })
         st.dataframe(
-            df_intermediacao_rank_display[['Cidade', 'UF', 'Qtd. Serviços', '% Intermediação', 'Valor Total']].style.format({ # CORRECTED HERE: '% Intermediação'
+            df_intermediacao_rank_display[['Cidade', 'UF', 'Qtd. Serviços', '% Intermediação', 'Valor Total']].style.format({
                 'Qtd. Serviços': '{:,.0f}',
-                '% Intermediação': '{:.2f}%', # And here for consistency in formatting
+                '% Intermediacao': '{:.2f}%',
                 'Valor Total': 'R$ {:,.2f}'
             }),
             use_container_width=True
         )
         st.markdown("**Sugestão:** Otimizar processos de acionamento ou recrutar prestadores diretos para reduzir intermediações.")
 
-def page_capilaridade(df, min_atendimentos_cidade):
-    """Renderiza a página de Capilaridade."""
-    st.title("📍 Capilaridade da Rede")
+
+def display_capilaridade_kpis(df_filtrado_original, df_agregado_cidade_com_indice=None):
+    st.markdown("---")
+    st.header("KPIs Gerais de Capilaridade")
+    
+    total_servicos = len(df_filtrado_original)
+    total_prestadores_unicos = df_filtrado_original['nome_do_prestador'].nunique()
+    total_cidades_atendidas = df_filtrado_original['municipio'].nunique()
+    media_tempo_chegada = df_filtrado_original['tempo_chegada_min'].mean()
+    pct_reembolso = (df_filtrado_original['is_reembolso'].sum() / total_servicos) * 100 if total_servicos > 0 else 0
+    pct_intermediacao = (df_filtrado_original['is_intermediacao'].sum() / total_servicos) * 100 if total_servicos > 0 else 0
+
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    col1.metric("Total de Serviços", f"{total_servicos:,}".replace(',', '.'), help="Número total de atendimentos registrados com os filtros aplicados.")
+    col2.metric("Prestadores Únicos", f"{total_prestadores_unicos:,}".replace(',', '.'), help="Número de prestadores distintos que realizaram atendimentos com os filtros aplicados.")
+    col3.metric("Cidades Atendidas", f"{total_cidades_atendidas:,}".replace(',', '.'), help="Número de municípios onde houve atendimentos com os filtros aplicados.")
+    col4.metric("TMC (min)", f"{media_tempo_chegada:.0f} min" if not pd.isna(media_tempo_chegada) else "N/A", help="Tempo Médio de Chegada do prestador ao local do serviço, em minutos.")
+    col5.metric("Perc. Reembolso", f"{pct_reembolso:.2f}%", help="Percentual de serviços que geraram algum tipo de reembolso, indicando falha na cobertura direta ou preferência do cliente.")
+    col6.metric("Perc. Intermediação", f"{pct_intermediacao:.2f}%", help="Percentual de serviços que foram realizados por meio de intermediação, e não por prestadores diretos da rede.")
+
+    if df_agregado_cidade_com_indice is not None and not df_agregado_cidade_com_indice.empty:
+        st.markdown("---")
+        st.header("Dispersão de Capilaridade por Cidade")
+        st.info("Visualize a relação entre o número de serviços e a quantidade de prestadores. Círculos maiores indicam maior volume de atendimentos. As cores representam o status de capilaridade da cidade.")
+
+        category_order = ['Carência Assistencial', 'Capilaridade Regular', 'Boa Capilaridade']
+        status_colors = {
+            'Carência Assistencial': '#EF5350',
+            'Capilaridade Regular': '#FFCA28',
+            'Boa Capilaridade': '#66BB6A'
+        }
+
+        fig_capilaridade = px.scatter(
+            df_agregado_cidade_com_indice, 
+            x='num_servicos',
+            y='num_prestadores',
+            color='status_capilaridade',
+            size='num_servicos',
+            hover_name='municipio',
+            hover_data={
+                'uf': True,
+                'num_servicos': ':.0f',
+                'num_prestadores': ':.0f',
+                'indice_capilaridade': ':.2f',
+                'status_capilaridade': True,
+                'pct_reembolso': ':.2f',
+                'pct_intermediacao': ':.2f',
+                'media_tempo_chegada': ':.0f'
+            },
+            title='Capilaridade: Serviços vs. Prestadores por Cidade e Status',
+            labels={
+                'num_servicos': 'Número de Serviços (Atendimentos)',
+                'num_prestadores': 'Número de Prestadores',
+                'status_capilaridade': 'Status de Capilaridade'
+            },
+            color_discrete_map=status_colors,
+            category_orders={'status_capilaridade': category_order},
+            height=600,
+            log_x=True,
+            )
+
+        fig_capilaridade.update_layout(
+            xaxis_title="Número de Serviços (Atendimentos)",
+            yaxis_title="Número de Prestadores",
+            legend_title="Status de Capilaridade",
+            hovermode="closest",
+            yaxis=dict(showgrid=False) 
+        )
+        
+        st.plotly_chart(fig_capilaridade, use_container_width=True)
+
+def page_capilaridade(df):
+    st.title("Capilaridade da Rede")
     st.markdown("Esta seção oferece uma visão detalhada da distribuição e cobertura dos nossos prestadores, identificando áreas de alta demanda e oportunidades de expansão.")
+
+
+    st.markdown("---")
 
     df_agregado_cidade = df.groupby(['uf', 'municipio'], observed=True).agg(
         num_servicos=('protocolo_atendimento', 'nunique'),
@@ -665,6 +517,17 @@ def page_capilaridade(df, min_atendimentos_cidade):
         media_tempo_chegada=('tempo_chegada_min', 'mean'),
         total_valor_servicos=('val_total_items', 'sum')
     ).reset_index()
+
+    min_atendimentos_cidade = st.number_input(
+        label="Defina o Mínimo de Atendimentos por Prestador", 
+        min_value=1,
+        max_value=200, 
+        value=MIN_ATTENDANCES_FOR_CITY_ANALYSIS, 
+        step=1,
+        help="Cidades com número de atendimentos abaixo deste valor não serão incluídas na análise de capilaridade detalhada."
+    )
+ 
+
 
     df_agregado_cidade['pct_reembolso'] = np.where(
         df_agregado_cidade['num_servicos'] > 0,
@@ -678,14 +541,16 @@ def page_capilaridade(df, min_atendimentos_cidade):
     )
     df_agregado_cidade['media_tempo_chegada'] = df_agregado_cidade['media_tempo_chegada'].fillna(0)
 
-    # NOVO CÁLCULO: Qtd. Serviços Não Atendidos
     df_agregado_cidade['num_servicos_nao_atendidos'] = df_agregado_cidade['num_servicos'] - \
                                                         df_agregado_cidade['num_reembolsos'] - \
                                                         df_agregado_cidade['num_intermediacoes']
     df_agregado_cidade['num_servicos_nao_atendidos'] = df_agregado_cidade['num_servicos_nao_atendidos'].clip(lower=0)
 
     df_agregado_cidade_filtrado = df_agregado_cidade[df_agregado_cidade['num_servicos'] >= min_atendimentos_cidade].copy()
+    
     df_agregado_cidade_com_indice = calculate_capilaridade_index(df_agregado_cidade_filtrado)
+
+    
 
     display_capilaridade_kpis(df, df_agregado_cidade_com_indice)
 
@@ -712,7 +577,7 @@ def page_capilaridade(df, min_atendimentos_cidade):
                     'uf': 'UF',
                     'num_servicos': 'Qtd. Serviços',
                     'num_prestadores': 'Qtd. Prestadores',
-                    'num_servicos_nao_atendidos': 'Qtd. Não Atendidos',
+                    'num_servicos_nao_atendidos': 'Qtd. Não Atendidos', 
                     'pct_reembolso': '% Reembolso',
                     'pct_intermediacao': '% Intermediação',
                     'media_tempo_chegada': 'TMC Médio (min)',
@@ -723,7 +588,7 @@ def page_capilaridade(df, min_atendimentos_cidade):
                     'Cidade', 
                     'UF', 
                     'Qtd. Serviços', 
-                    'Qtd. Não Atendidos', # Ordem da coluna na exibição
+                    'Qtd. Não Atendidos', 
                     'Qtd. Prestadores', 
                     '% Reembolso', 
                     '% Intermediação', 
@@ -733,17 +598,16 @@ def page_capilaridade(df, min_atendimentos_cidade):
                     'Sugestão de Ação'
                 ]].style.format({
                         'Qtd. Serviços': '{:,.0f}',
-                        'Qtd. Serviços Não Atendidos': '{:,.0f}', # Formatação
+                        'Qtd. Não Atendidos': '{:,.0f}', 
                         'Qtd. Prestadores': '{:,.0f}',
                         '% Reembolso': '{:.2f}%',
-                        '% Intermediação': '{:.2f}%',
+                        '% Intermediacao': '{:.2f}%',
                         'TMC Médio (min)': '{:.0f}',
                         'Índice Capilaridade': '{:.2f}'
                     }),
                 use_container_width=True
             )
-          
-
+            
             col_dl1, col_dl2, col_dl3 = st.columns(3)
             with col_dl2:
                 output = io.BytesIO()
@@ -777,7 +641,6 @@ def page_capilaridade(df, min_atendimentos_cidade):
     else:
         st.info("Nenhum dado de capilaridade disponível com os filtros e limites selecionados.")
 
-    # Expander de cálculo do Índice de Capilaridade (mantido para contexto)
     with st.expander("💡 Como é calculado o Índice de Capilaridade?"):
         st.markdown(r"""
         O **Índice de Capilaridade** é um score composto que avalia a eficiência e a cobertura da rede em cada cidade, combinando múltiplos fatores:
@@ -800,7 +663,6 @@ def page_capilaridade(df, min_atendimentos_cidade):
         * **Boa Capilaridade:** Cidades no quartil superior (melhores 25%).
         """)
 
-    # Expander de sugestões de ação (mantido para contexto)
     with st.expander("💡 Como são geradas as Sugestões de Ação?"):
         st.markdown("""
         As sugestões de ação são geradas dinamicamente para cada município com base em suas características e desvios em relação à média:
@@ -813,75 +675,19 @@ def page_capilaridade(df, min_atendimentos_cidade):
         """)
 
 def page_financeiro(df):
-    """Renderiza a página Financeira, incluindo filtros, KPIs financeiros e rankings."""
     st.title("Análise Financeira da Rede de Prestadores")
     st.markdown("Monitore os custos, otimize as despesas e melhore a rentabilidade da sua rede.")
 
-    # --- Barra Lateral para Filtros ---
-    st.sidebar.markdown("## ⚙️ Filtros de Análise Financeira") # Changed to markdown with gear icon
-
-    segmento_selecionado = st.sidebar.multiselect(
-        "Filtrar por Segmento (Financeiro)",
-        options=[ALL_OPTION] + sorted(df['segmento'].dropna().unique().tolist()),
-        default=[ALL_OPTION]
-    )
-    if ALL_OPTION in segmento_selecionado:
-        segmento_selecionado = df['segmento'].dropna().unique().tolist()
-
-    seguradora_selecionada = st.sidebar.multiselect(
-        "Filtrar por Seguradora (Financeiro)",
-        options=[ALL_OPTION] + sorted(df['seguradora'].dropna().unique().tolist()),
-        default=[ALL_OPTION]
-    )
-    if ALL_OPTION in seguradora_selecionada:
-        seguradora_selecionada = df['seguradora'].dropna().unique().tolist()
-
-    estado_selecionado = st.sidebar.multiselect(
-        "Filtrar por Estado (Financeiro)",
-        options=[ALL_OPTION] + sorted(df['uf'].dropna().unique().tolist()),
-        default=[ALL_OPTION]
-    )
-    if ALL_OPTION in estado_selecionado:
-        estado_selecionado = df['uf'].dropna().unique().tolist()
-
-    municipio_selecionado = st.sidebar.multiselect(
-        "Filtrar por Cidade (Financeiro)",
-        options=[ALL_OPTION] + sorted(df['municipio'].dropna().unique().tolist()),
-        default=[ALL_OPTION]
-    )
-    if ALL_OPTION in municipio_selecionado:
-        municipio_selecionado = df['municipio'].dropna().unique().tolist()
-
-    min_date_data = df['data_abertura_atendimento'].min().date()
-    max_date_data = df['data_abertura_atendimento'].max().date()
-    data_inicio, data_fim = st.sidebar.date_input(
-        "Período de Análise (Financeiro)",
-        value=(min_date_data, max_date_data),
-        min_value=min_date_data,
-        max_value=max_date_data,
-        format="DD/MM/YYYY",
-        help="O período máximo de análise permitido é de 6 meses."
-    )
-
-    df_filtrado = apply_filters(df, segmento_selecionado, seguradora_selecionada, estado_selecionado, municipio_selecionado, data_inicio, data_fim)
-
-    if df_filtrado.empty:
-        st.info("Nenhum dado financeiro disponível com os filtros selecionados. Ajuste os filtros.")
-        return
-
-    # --- Seções da Página Financeira ---
-
-    # 1. KPIs Financeiros Gerais
     st.markdown("---")
     st.header("KPIs Financeiros Gerais")
     st.markdown("Visualize os indicadores financeiros chave da sua rede.")
 
-    total_gasto = df_filtrado['val_total_items'].sum()
-    total_servicos = len(df_filtrado)
+    total_gasto = df['val_total_items'].sum()
+    total_servicos = len(df)
     cms_medio = total_gasto / total_servicos if total_servicos > 0 else 0
-    total_reembolso = df_filtrado['val_reembolso'].sum()
+    total_reembolso = df['val_reembolso'].sum()
     pct_gasto_reembolso = (total_reembolso / total_gasto) * 100 if total_gasto > 0 else 0
-    total_intermediacao_servicos = df_filtrado['is_intermediacao'].sum()
+    total_intermediacao_servicos = df['is_intermediacao'].sum()
     pct_intermediacao_servicos = (total_intermediacao_servicos / total_servicos) * 100 if total_servicos > 0 else 0
 
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -891,19 +697,27 @@ def page_financeiro(df):
     col4.metric("% Gasto c/ Reembolso", f"{pct_gasto_reembolso:.2f}%", help="Percentual do gasto total que foi via reembolso.")
     col5.metric("P/ Serv. Intermediação", f"{pct_intermediacao_servicos:.2f}%", help="Percentual de serviços que foram de intermediação.")
 
-    # 2. Ranking de CMS por Prestador
+    st.markdown("---")
+    min_servicos_prestador = st.number_input(
+        label="Defina o Mínimo de Atendimentos por Prestador", 
+        min_value=1,
+        max_value=200,
+        value=MIN_ATTENDANCES_FOR_RANKING,
+        step=1,
+        help="Prestadores com um número de serviços abaixo deste valor não serão incluídos nas análises de ranking e ofensores."
+    )
+
     st.markdown("---")
     st.header("Ranking de Custo Médio por Serviço (CMS) por Prestador")
     st.markdown("Identifique os **prestadores com maior e menor CMS**. Uma alta variância pode indicar oportunidades de negociação ou revisão de processos.")
 
-    cms_por_prestador = df_filtrado.groupby('nome_do_prestador', observed=True).agg(
+    cms_por_prestador = df.groupby('nome_do_prestador', observed=True).agg(
         qtd_servicos=('protocolo_atendimento', 'count'),
         cms=('val_total_items', 'mean')
     ).reset_index()
 
-    cms_por_prestador = cms_por_prestador[cms_por_prestador['qtd_servicos'] >= MIN_ATTENDANCES_FOR_RANKING]
+    cms_por_prestador = cms_por_prestador[cms_por_prestador['qtd_servicos'] >= min_servicos_prestador]
 
-    # RE-INSERÇÃO DA CORREÇÃO: Garantir que 'cms' não tenha NaNs antes de formatar
     cms_por_prestador['cms'] = cms_por_prestador['cms'].fillna(0)
 
     if not cms_por_prestador.empty:
@@ -935,17 +749,15 @@ def page_financeiro(df):
             use_container_width=True
         )
     else:
-        st.info(f"Nenhum dado de CMS por prestador (com mais de {MIN_ATTENDANCES_FOR_RANKING} serviços) disponível com os filtros selecionados.")
+        st.info(f"Nenhum dado de CMS por prestador (com mais de {min_servicos_prestador} serviços) disponível com os filtros selecionados.")
 
 
-    # 4. Custo Médio por Faixa de Tempo de Chegada
     st.markdown("---")
     st.header("Custo Médio por Faixa de Tempo de Chegada")
     st.markdown("Avalie o **impacto do tempo de chegada no custo do serviço**. Tempos de chegada muito curtos (urgência) ou muito longos (ineficiência) podem influenciar o custo final.")
 
-    if 'tempo_chegada_min' in df_filtrado.columns and pd.api.types.is_numeric_dtype(df_filtrado['tempo_chegada_min']):
-        # Define os bins e rótulos apenas se 'tempo_chegada_min' tiver dados válidos após os filtros
-        df_valid_tempo_chegada = df_filtrado.dropna(subset=['tempo_chegada_min'])
+    if 'tempo_chegada_min' in df.columns and pd.api.types.is_numeric_dtype(df['tempo_chegada_min']):
+        df_valid_tempo_chegada = df.dropna(subset=['tempo_chegada_min'])
 
         if not df_valid_tempo_chegada.empty:
             bins = [0, 30, 60, 120, np.inf]
@@ -957,15 +769,11 @@ def page_financeiro(df):
                 cms=('val_total_items', 'mean')
             ).reset_index()
 
-            # Filtra quaisquer categorias NaN se surgirem de `pd.cut` (por exemplo, se tempo_chegada_min era NaN)
             cms_por_tempo = cms_por_tempo.dropna(subset=['faixa_tempo_chegada'])
 
-            # RE-INSERÇÃO DA CORREÇÃO: Garantir que 'cms' não tenha NaNs
             cms_por_tempo['cms'] = cms_por_tempo['cms'].fillna(0)
 
-
             if not cms_por_tempo.empty:
-                # Garante a ordem das categorias para plotagem
                 cms_por_tempo['faixa_tempo_chegada'] = pd.Categorical(cms_por_tempo['faixa_tempo_chegada'], categories=labels, ordered=True)
                 cms_por_tempo = cms_por_tempo.sort_values('faixa_tempo_chegada')
 
@@ -1002,80 +810,57 @@ def page_financeiro(df):
     else:
         st.warning("Coluna 'tempo_chegada_min' não encontrada ou não é numérica no DataFrame. Não foi possível gerar a análise por tempo de chegada.")
 
-
-
-
-    # 5. Análise de Ofensores CMS por Prestador, UF e Segmento
     st.markdown("---")
     st.header("Análise de Ofensores de CMS por Prestador")
     st.markdown("Identifique prestadores com CMS acima da **média de sua UF e segmento**, e calcule o potencial de economia.")
 
-    # Filtrar apenas os segmentos de interesse
     segments_for_analysis = ['AUTO', 'RESID', 'VIDA']
-    df_financeiro_analise = df_filtrado[df_filtrado['segmento'].isin(segments_for_analysis)].copy()
+    df_financeiro_analise = df[df['segmento'].isin(segments_for_analysis)].copy()
 
     if df_financeiro_analise.empty:
         st.info("Nenhum dado disponível para os segmentos AUTO, RESID ou VIDA com os filtros selecionados.")
-        # Early exit if no data for analysis segments
     else:
-        # --- NOVO CÁLCULO: CMS médio por UF e Segmento ---
-        # Calcular CMS médio por UF E Segmento (globalmente nos dados filtrados)
         cms_medio_uf_segmento_df = df_financeiro_analise.groupby(['uf', 'segmento'], observed=True).agg(
             cms_medio_uf_segmento=('val_total_items', 'mean')
         ).reset_index()
 
-        # Calcular CMS por prestador, UF e segmento
         cms_ofensores = df_financeiro_analise.groupby(['nome_do_prestador', 'uf', 'segmento'], observed=True).agg(
             qtd_servicos=('protocolo_atendimento', 'count'),
             cms_prestador=('val_total_items', 'mean')
         ).reset_index()
 
-        # --- ATUALIZAÇÃO: Merge com o NOVO CMS médio por UF e Segmento ---
+        cms_ofensores = cms_ofensores[cms_ofensores['qtd_servicos'] >= min_servicos_prestador]
+
         cms_ofensores = pd.merge(cms_ofensores, cms_medio_uf_segmento_df, on=['uf', 'segmento'], how='left')
 
-        # Filtrar prestadores com CMS significativo para análise (e.g., > MIN_ATTENDANCES_FOR_RANKING)
-        cms_ofensores = cms_ofensores[cms_ofensores['qtd_servicos'] >= MIN_ATTENDANCES_FOR_RANKING]
-
-        # Identificar ofensores: CMS do prestador é 10% maior que o CMS médio DA UF E SEGMENTO
         cms_ofensores['is_ofensor'] = (cms_ofensores['cms_prestador'] > cms_ofensores['cms_medio_uf_segmento'] * 1.10)
         
-        # Calculate Potencial de Economia (R$)
-        # Only calculate for offenders
         cms_ofensores['potencial_economia_rs'] = np.where(
             cms_ofensores['is_ofensor'],
             (cms_ofensores['cms_prestador'] - cms_ofensores['cms_medio_uf_segmento']) * cms_ofensores['qtd_servicos'],
             0
         )
 
-        # RE-INSERÇÃO DA CORREÇÃO: Garantir que as colunas numéricas de ofensores não tenham NaNs
         cms_ofensores['cms_prestador'] = cms_ofensores['cms_prestador'].fillna(0)
-        # --- ATUALIZAÇÃO: Usar o novo nome da coluna de CMS médio ---
         cms_ofensores['cms_medio_uf_segmento'] = cms_ofensores['cms_medio_uf_segmento'].fillna(0)
         cms_ofensores['potencial_economia_rs'] = cms_ofensores['potencial_economia_rs'].fillna(0)
 
-
-        # Reordenar colunas e renomear para exibição
         cms_ofensores_display = cms_ofensores.rename(columns={
             'nome_do_prestador': 'Prestador',
             'uf': 'UF',
             'segmento': 'Segmento',
             'qtd_servicos': 'Qtd. Serviços',
             'cms_prestador': 'CMS do Prestador',
-            # --- ATUALIZAÇÃO: Novo nome da coluna para exibição ---
             'cms_medio_uf_segmento': 'CMS Médio UF/Segmento',
             'is_ofensor': 'Ofensor?',
             'potencial_economia_rs': 'Potencial de Economia (R$)'
         })
 
-        # --- FILTRAGEM ADICIONAL AQUI ---
-        # Prestadores a serem excluídos (em letras maiúsculas, conforme o processamento de dados)
         prestadores_para_excluir = ['VAZIO', 'MOVIDA', 'LOCALIZA RENT A CAR']
         
-        # Aplicar o filtro
         cms_ofensores_display = cms_ofensores_display[
             ~cms_ofensores_display['Prestador'].isin(prestadores_para_excluir)
         ]
-        # --- FIM DA FILTRAGEM ADICIONAL ---
 
         if not cms_ofensores_display.empty:
             st.subheader("Tabela de Ofensores de CMS")
@@ -1093,641 +878,715 @@ def page_financeiro(df):
         else:
             st.info("Nenhum prestador identificado como 'ofensor' de CMS com base nos critérios e filtros selecionados.")
 
-
-
-def page_qualidade(df_quality_kpis):
+def page_qualidade(df_final_filtrado, df_nps_cidade_full, df_nps_prestador):
     st.title("✨ Qualidade e NPS")
     st.markdown("Esta seção exibe a evolução do Net Promoter Score (NPS) e os rankings de qualidade por cidade e prestador.")
 
-    if df_quality_kpis.empty:
-        st.info("Nenhum dado de qualidade (NPS) disponível. Por favor, verifique se o arquivo 'qualidade_kpis.parquet' existe e está preenchido.")
-        return
-    
-    # Evolução do NPS
-    st.markdown("---")
-    st.subheader("Evolução do Net Promoter Score (NPS)")
-    fig_nps = px.line(
-        df_quality_kpis.sort_values('mes_ano'),
-        x='mes_ano',
-        y='nps',
-        title='Evolução Mensal do NPS',
-        labels={'mes_ano': 'Mês/Ano', 'nps': 'NPS'},
-        markers=True
-    )
-    fig_nps.update_xaxes(dtick="M1", tickformat="%b\n%Y")
-    fig_nps.update_yaxes(range=[-100, 100]) # NPS ranges from -100 to 100
-    st.plotly_chart(fig_nps, use_container_width=True)
+    # Função para formatar números no padrão PT-BR
+    def format_pt_br(value, precision=0):
+        if pd.isna(value):
+            return "N/A"
+        if precision == 0:
+            formatted = f"{value:,.0f}"
+        else:
+            formatted = f"{value:,.{precision}f}"
+        # Inverte vírgula e ponto para padrão PT-BR
+        return formatted.replace(",", "X").replace(".", ",").replace("X", ".")
 
-    # Ranking NPS por Cidade (Top 10 e Piores 10)
+    # Exemplo usando df_nps_cidade_full para evolução do NPS
+    if not df_nps_cidade_full.empty:
+        # Garante que 'mes_ano' seja datetime para o gráfico
+        if pd.api.types.is_period_dtype(df_nps_cidade_full['mes_ano']):
+            df_nps_cidade_full['mes_ano_dt'] = df_nps_cidade_full['mes_ano'].dt.to_timestamp()
+        else:
+            df_nps_cidade_full['mes_ano_dt'] = pd.to_datetime(df_nps_cidade_full['mes_ano'], errors='coerce')
+
+
+        df_nps_evolucao = df_nps_cidade_full.groupby('mes_ano_dt').agg(
+            promotores=('nps_promotores', 'sum'),
+            detratores=('nps_detratores', 'sum'),
+            neutros=('nps_neutros', 'sum')
+        ).reset_index()
+
+        df_nps_evolucao['total_responses'] = df_nps_evolucao['promotores'] + df_nps_evolucao['detratores'] + df_nps_evolucao['neutros']
+        df_nps_evolucao['nps_score'] = np.where(
+            df_nps_evolucao['total_responses'] > 0,
+            ((df_nps_evolucao['promotores'] - df_nps_evolucao['detratores']) / df_nps_evolucao['total_responses']) * 100,
+            np.nan
+        )
+        df_nps_evolucao = df_nps_evolucao.dropna(subset=['nps_score']).sort_values('mes_ano_dt')
+
+        st.markdown("---")
+        st.subheader("Evolução do Net Promoter Score (NPS) Geral")
+        if not df_nps_evolucao.empty:
+            fig_nps = px.line(
+                df_nps_evolucao,
+                x='mes_ano_dt',
+                y='nps_score',
+                title='Evolução Mensal do NPS Geral',
+                labels={'mes_ano_dt': 'Mês/Ano', 'nps_score': 'NPS'},
+                markers=True
+            )
+            fig_nps.update_xaxes(dtick="M1", tickformat="%b\n%Y")
+            fig_nps.update_yaxes(range=[-100, 100])
+            st.plotly_chart(fig_nps, use_container_width=True)
+        else:
+            st.info("Nenhum dado disponível para a evolução mensal do NPS.")
+    else:
+        st.info("Nenhum dado de NPS por cidade disponível para calcular a evolução do NPS geral.")
+    
+    # --- Ranking NPS por Cidade (Top 10 e Piores 10) ---
     st.markdown("---")
     st.subheader("NPS por Cidade")
     st.info("Visualize as cidades com melhor e pior desempenho no NPS. Isso pode indicar onde focar esforços de melhoria de serviço.")
 
-    df_nps_cidade = df_quality_kpis.groupby('municipio')['nps'].mean().reset_index().sort_values('nps', ascending=False)
+    if df_nps_cidade_full.empty:
+        st.warning("Nenhum dado de NPS por cidade disponível para esta análise. Verifique o arquivo 'processed_nps_by_city.parquet'.")
+    else:
+        # Agregamos o NPS por cidade, considerando as avaliações totais para relevância
+        df_nps_cidade_agg = df_nps_cidade_full.groupby('municipio', observed=True).agg(
+            promotores=('nps_promotores', 'sum'),
+            detratores=('nps_detratores', 'sum'),
+            neutros=('nps_neutros', 'sum')
+        ).reset_index()
 
-    col_nps_best_city, col_nps_worst_city = st.columns(2)
-
-    with col_nps_best_city:
-        st.markdown("#### Top 10 Cidades (Melhor NPS)")
-        st.dataframe(
-            df_nps_cidade.head(10).rename(columns={'municipio': 'Cidade', 'nps': 'NPS Médio'}).style.format({'NPS Médio': '{:.1f}'}),
-            use_container_width=True
+        df_nps_cidade_agg['total_avaliacoes'] = df_nps_cidade_agg['promotores'] + df_nps_cidade_agg['detratores'] + df_nps_cidade_agg['neutros']
+        df_nps_cidade_agg['nps_score'] = np.where(
+            df_nps_cidade_agg['total_avaliacoes'] > 0,
+            ((df_nps_cidade_agg['promotores'] - df_nps_cidade_agg['detratores']) / df_nps_cidade_agg['total_avaliacoes']) * 100,
+            np.nan
         )
-    with col_nps_worst_city:
-        st.markdown("#### Top 10 Cidades (Pior NPS)")
-        st.dataframe(
-            df_nps_cidade.tail(10).sort_values('nps', ascending=True).rename(columns={'municipio': 'Cidade', 'nps': 'NPS Médio'}).style.format({'NPS Médio': '{:.1f}'}),
-            use_container_width=True
-        )
-    st.markdown("**Sugestão:** Implementar programas de incentivo ou treinamento nas cidades com baixo NPS, e replicar as melhores práticas das cidades com alto NPS.")
+        
+        df_nps_cidade_agg = df_nps_cidade_agg.dropna(subset=['nps_score'])
 
-    # Ranking NPS por Prestador (Top 10 e Piores 10)
+        min_avaliacoes_cidade = st.slider("Mínimo de Avaliações para Cidades", min_value=1, max_value=50, value=10, key="min_eval_city_nps_table")
+        df_nps_cidade_filtered = df_nps_cidade_agg[df_nps_cidade_agg['total_avaliacoes'] >= min_avaliacoes_cidade]
+
+        if not df_nps_cidade_filtered.empty:
+            col_nps_best_city, col_nps_worst_city = st.columns(2)
+
+            with col_nps_best_city:
+                st.markdown("#### Top 10 Cidades (Melhor NPS)")
+                st.dataframe(
+                    df_nps_cidade_filtered.sort_values('nps_score', ascending=False).head(10)
+                    .rename(columns={'municipio': 'Cidade', 'nps_score': 'NPS Médio', 'total_avaliacoes': 'Qtd. Avaliações'}).style.format({
+                        'NPS Médio': lambda x: format_pt_br(x, 1),
+                        'Qtd. Avaliações': lambda x: format_pt_br(x, 0)
+                    }),
+                    use_container_width=True
+                )
+            with col_nps_worst_city:
+                st.markdown("#### Top 10 Cidades (Pior NPS)")
+                st.dataframe(
+                    df_nps_cidade_filtered.sort_values('nps_score', ascending=True).head(10) # Piores são os primeiros na ordem crescente
+                    .rename(columns={'municipio': 'Cidade', 'nps_score': 'NPS Médio', 'total_avaliacoes': 'Qtd. Avaliações'}).style.format({
+                        'NPS Médio': lambda x: format_pt_br(x, 1),
+                        'Qtd. Avaliações': lambda x: format_pt_br(x, 0)
+                    }),
+                    use_container_width=True
+                )
+        else:
+            st.info(f"Nenhuma cidade encontrada com NPS calculado e pelo menos {min_avaliacoes_cidade} avaliações.")
+        st.markdown("**Sugestão:** Implementar programas de incentivo ou treinamento nas cidades com baixo NPS, e replicar as melhores práticas das cidades com alto NPS.")
+
+
+    # --- Ranking NPS por Prestador (Top 10 e Piores 10) ---
     st.markdown("---")
     st.subheader("NPS por Prestador")
     st.info("Identifique os prestadores com melhor e pior performance no NPS. Use esta informação para reconhecimento ou para planos de desenvolvimento.")
 
-    df_nps_prestador = df_quality_kpis.groupby('nome_do_prestador')['nps'].mean().reset_index().sort_values('nps', ascending=False)
+    if df_nps_prestador.empty:
+        st.warning("Nenhum dado de NPS por prestador disponível para esta análise. Verifique o arquivo 'processed_nps_by_provider.parquet'.")
+    else:
+        # Agregamos o NPS por prestador, considerando as avaliações totais para relevância
+        df_nps_prestador_agg = df_nps_prestador.groupby('nome_do_prestador', observed=True).agg(
+            promotores=('nps_promotores', 'sum'),
+            detratores=('nps_detratores', 'sum'),
+            neutros=('nps_neutros', 'sum')
+        ).reset_index()
 
-    col_nps_best_prestador, col_nps_worst_prestador = st.columns(2)
-
-    with col_nps_best_prestador:
-        st.markdown("#### Top 10 Prestadores (Melhor NPS)")
-        st.dataframe(
-            df_nps_prestador.head(10).rename(columns={'nome_do_prestador': 'Prestador', 'nps': 'NPS Médio'}).style.format({'NPS Médio': '{:.1f}'}),
-            use_container_width=True
+        df_nps_prestador_agg['total_avaliacoes'] = df_nps_prestador_agg['promotores'] + df_nps_prestador_agg['detratores'] + df_nps_prestador_agg['neutros']
+        df_nps_prestador_agg['nps_score'] = np.where(
+            df_nps_prestador_agg['total_avaliacoes'] > 0,
+            ((df_nps_prestador_agg['promotores'] - df_nps_prestador_agg['detratores']) / df_nps_prestador_agg['total_avaliacoes']) * 100,
+            np.nan
         )
-    with col_nps_worst_prestador:
-        st.markdown("#### Top 10 Prestadores (Pior NPS)")
-        st.dataframe(
-            df_nps_prestador.tail(10).sort_values('nps', ascending=True).rename(columns={'nome_do_prestador': 'Prestador', 'nps': 'NPS Médio'}).style.format({'NPS Médio': '{:.1f}'}),
-            use_container_width=True
-        )
-    st.markdown("**Sugestão:** Avaliar treinamentos específicos ou programas de mentoria para prestadores com baixo NPS. Reconhecer e aprender com os de alto desempenho.")
 
-# Assume these are defined elsewhere in your code, or define them here for this example
-MIN_ATTENDANCES_FOR_RANKING = 10  # Example value
+        df_nps_prestador_agg = df_nps_prestador_agg.dropna(subset=['nps_score'])
+
+        min_avaliacoes_prestador = st.slider("Mínimo de Avaliações para Prestadores", min_value=1, max_value=50, value=10, key="min_eval_provider_nps_table")
+        df_nps_prestador_filtered = df_nps_prestador_agg[df_nps_prestador_agg['total_avaliacoes'] >= min_avaliacoes_prestador]
+
+        if not df_nps_prestador_filtered.empty:
+            col_nps_best_prestador, col_nps_worst_prestador = st.columns(2)
+
+            with col_nps_best_prestador:
+                st.markdown("#### Top 10 Prestadores (Melhor NPS)")
+                st.dataframe(
+                    df_nps_prestador_filtered.sort_values('nps_score', ascending=False).head(10)
+                    .rename(columns={'nome_do_prestador': 'Prestador', 'nps_score': 'NPS Médio', 'total_avaliacoes': 'Qtd. Avaliações'}).style.format({
+                        'NPS Médio': lambda x: format_pt_br(x, 1),
+                        'Qtd. Avaliações': lambda x: format_pt_br(x, 0)
+                    }),
+                    use_container_width=True
+                )
+            with col_nps_worst_prestador:
+                st.markdown("#### Top 10 Prestadores (Pior NPS)")
+                st.dataframe(
+                    df_nps_prestador_filtered.sort_values('nps_score', ascending=True).head(10) # Piores são os primeiros na ordem crescente
+                    .rename(columns={'nome_do_prestador': 'Prestador', 'nps_score': 'NPS Médio', 'total_avaliacoes': 'Qtd. Avaliações'}).style.format({
+                        'NPS Médio': lambda x: format_pt_br(x, 1),
+                        'Qtd. Avaliações': lambda x: format_pt_br(x, 0)
+                    }),
+                    use_container_width=True
+                )
+        else:
+            st.info(f"Nenhum prestador encontrado com NPS calculado e pelo menos {min_avaliacoes_prestador} avaliações.")
+        st.markdown("**Sugestão:** Avaliar treinamentos específicos ou programas de mentoria para prestadores com baixo NPS. Reconhecer e aprender com os de alto desempenho.")
+
+    # --- Distribuição do TMC (utiliza o df_final_filtrado) ---
+    st.markdown("---")
+    st.header("Distribuição do TMC por Segmento e Seguradora")
+
+    if df_final_filtrado.empty or 'tempo_chegada_min' not in df_final_filtrado.columns:
+        st.warning("Dados de atendimentos ou coluna 'tempo_chegada_min' não disponíveis para a análise de TMC.")
+    else:
+        col_tmc_segmento, col_tmc_seguradora = st.columns(2)
+
+        with col_tmc_segmento:
+            st.subheader("TMC por Segmento")
+            tmc_por_segmento = df_final_filtrado.groupby('segmento', observed=True)['tempo_chegada_min'].mean().reset_index()
+            tmc_por_segmento['tempo_chegada_min'] = tmc_por_segmento['tempo_chegada_min'].fillna(0)
+            st.dataframe(
+                tmc_por_segmento.rename(columns={'tempo_chegada_min': 'TMC Médio (min)'}).style.format(
+                    {'TMC Médio (min)': lambda x: format_pt_br(x, 0)}
+                ),
+                use_container_width=True
+            )
+
+        with col_tmc_seguradora:
+            st.subheader("TMC por Seguradora")
+            tmc_por_seguradora = df_final_filtrado.groupby('seguradora', observed=True)['tempo_chegada_min'].mean().reset_index()
+            tmc_por_seguradora['tempo_chegada_min'] = tmc_por_seguradora['tempo_chegada_min'].fillna(0)
+            st.dataframe(
+                tmc_por_seguradora.rename(columns={'tempo_chegada_min': 'TMC Médio (min)'}).style.format(
+                    {'TMC Médio (min)': lambda x: format_pt_br(x, 0)}
+                ),
+                use_container_width=True
+            )
+
 def calculate_prestador_score(df):
     if df.empty:
         df['score_prestador'] = []
         df['status_score'] = []
         return df
 
-    # Ensure these columns exist before calculating.
-    # If 'nps_score_calculado' doesn't exist, use 'media_nps' from aggregation directly.
-    # The error message implies 'nps_score_calculado' is expected earlier.
-    # Let's use the aggregated 'media_nps' and others.
+    # Preenchimento de NaNs para evitar erros, usando a mediana
+    for col in ['media_nps', 'media_tempo_chegada', 'total_atendimentos', 'pct_reembolso', 'pct_intermediacao']:
+        if df[col].isnull().any():
+            df[col] = df[col].fillna(df[col].median())
 
-    # Normalize metrics. Assuming higher is better for NPS and lower is better for others.
-    # You'll need actual normalization logic if you want a precise score.
-    # This is a dummy for demonstration.
+    # Normalização das métricas
+    max_atendimentos = df['total_atendimentos'].max() if df['total_atendimentos'].max() > 0 else 1
+    max_tempo_chegada = df['media_tempo_chegada'].max() if df['media_tempo_chegada'].max() > 0 else 1
+    max_pct_reembolso = df['pct_reembolso'].max() if df['pct_reembolso'].max() > 0 else 1
+    max_pct_intermediacao = df['pct_intermediacao'].max() if df['pct_intermediacao'].max() > 0 else 1
+    
+    pesos = {'atendimentos': 0.25, 'nps': 0.30, 'tempo_chegada': 0.20, 'reembolso': 0.15, 'intermediacao': 0.10}
+
     df['score_prestador'] = (
-        (df['media_nps'] / 100 * 0.30) + # Normalize NPS (e.g., if 0-100)
-        (df['total_atendimentos'] / df['total_atendimentos'].max() * 0.25) + # Normalize total atendimentos
-        (1 - (df['pct_reembolso'] / 100)) * 0.15 + # Inverse for reimbursement
-        (1 - (df['pct_intermediacao'] / 100)) * 0.10 + # Inverse for intermediation
-        (1 - (df['media_tempo_chegada'] / df['media_tempo_chegada'].max())) * 0.20 # Inverse for TMC
+        (df['total_atendimentos'] / max_atendimentos * pesos['atendimentos']) +
+        (df['media_nps'] / 100 * pesos['nps']) +
+        (1 - (df['media_tempo_chegada'] / max_tempo_chegada)) * pesos['tempo_chegada'] +
+        (1 - (df['pct_reembolso'] / max_pct_reembolso)) * pesos['reembolso'] +
+        (1 - (df['pct_intermediacao'] / max_pct_intermediacao)) * pesos['intermediacao']
     )
-    # Re-normalize score to a more readable scale, e.g., 0-100
-    df['score_prestador'] = (df['score_prestador'] - df['score_prestador'].min()) / (df['score_prestador'].max() - df['score_prestador'].min()) * 100
     
-    # Classify based on quartiles for status, even if we remove the chart, it might be used by suggestions
-    df['status_score'] = pd.qcut(df['score_prestador'], 4, labels=['Precisa de Atenção', 'Regular', 'Bom', 'Excelente'], duplicates='drop')
-    
+    min_score, max_score = df['score_prestador'].min(), df['score_prestador'].max()
+    if max_score > min_score:
+        df['score_prestador'] = (df['score_prestador'] - min_score) / (max_score - min_score) * 100
+    else:
+        df['score_prestador'] = 50
+
+    if len(df['score_prestador'].unique()) > 1:
+        df['status_score'] = pd.qcut(df['score_prestador'], 4, labels=['Precisa de Atenção', 'Regular', 'Bom', 'Excelente'], duplicates='drop')
+    else:
+        df['status_score'] = 'Regular'
+        
     return df
 
-def get_prestador_sugestao_acao(row):
+# --- FUNÇÃO DE SUGESTÕES (Texto puro) ---
+def get_prestador_sugestao_acao(row, df_completo):
+    """
+    Gera sugestões de ação simples, em texto puro.
+    """
     suggestions = []
+    # Usar quartis para limiares dinâmicos
+    q75_reembolso = df_completo['pct_reembolso'].quantile(0.75)
+    q75_intermediacao = df_completo['pct_intermediacao'].quantile(0.75)
+    q75_tmc = df_completo['media_tempo_chegada'].quantile(0.75)
+    q25_nps = df_completo['media_nps'].quantile(0.25)
+
     if row['status_score'] == 'Precisa de Atenção':
-        suggestions.append('Avaliar performance geral. Considerar treinamento ou revisão de contrato.')
+        suggestions.append('Performance geral crítica. Avaliar treinamento ou revisão de contrato.')
     
-    if row['media_nps'] < 50: # Example threshold for low NPS
-        suggestions.append('Baixo NPS. Investigar causas de insatisfação do cliente.')
+    if row['media_nps'] <= q25_nps and row['media_nps'] < 75:
+        suggestions.append('NPS baixo. Investigar causas de insatisfação do cliente.')
     
-    if row['pct_reembolso'] > 10: # Example threshold for high reimbursement
-        suggestions.append('Alto % de reembolso. Rever processos ou precificação.')
+    if row['pct_reembolso'] > q75_reembolso and row['pct_reembolso'] > 0:
+        suggestions.append('Alto percentual de reembolso. Rever processos ou precificação.')
     
-    if row['pct_intermediacao'] > 5: # Example threshold for high intermediation
-        suggestions.append('Alto % de intermediação. Aumentar capacidade ou eficiência.')
+    if row['pct_intermediacao'] > q75_intermediacao and row['pct_intermediacao'] > 0:
+        suggestions.append('Alto percentual de intermediação. Aumentar capacidade ou eficiência.')
 
-    if row['media_tempo_chegada'] > 90: # Example threshold for high TMC
-        suggestions.append('Alto TMC. Otimizar logística ou realocar prestador.')
+    if row['media_tempo_chegada'] > q75_tmc:
+        suggestions.append('Tempo médio de chegada elevado. Otimizar logística ou realocação.')
         
-    return "; ".join(suggestions) if suggestions else "N/A"
+    return "; ".join(suggestions) if suggestions else "Bom desempenho. Nenhuma ação crítica necessária."
 
-def page_score_prestador(df):
-    st.title("Score do Prestador")
-    st.markdown("Esta seção apresenta um score consolidado para cada prestador, com base em diversos indicadores de performance. Identifique os principais ofensores e as oportunidades de melhoria na rede.")
+# --- PÁGINA PRINCIPAL DO STREAMLIT (VERSÃO FINAL AJUSTADA) ---
+def page_score_prestador(df_atendimentos_filtrado, df_nps_prestador):
+    st.title("Score de Performance do Prestador")
+    st.markdown("Análise de performance da rede de prestadores com foco em KPIs e ações corretivas.")
 
-    if df.empty:
-        st.info("Nenhum dado disponível para calcular o score dos prestadores com os filtros selecionados.")
+    if df_atendimentos_filtrado.empty:
+        st.info("Nenhum dado de atendimento disponível para os filtros selecionados.")
         return
+    
+    # --- FILTRO DE ANÁLISE NA PÁGINA PRINCIPAL ---
+    st.markdown("---")
+    min_atendimentos = st.number_input(
+        label="Defina o Mínimo de Atendimentos por Prestador", 
+        min_value=1, 
+        value=5, 
+        step=1,
+        help="Apenas prestadores com um número de atendimentos igual ou superior a este valor serão exibidos na análise."
+    )
+    
+    # --- PROCESSAMENTO DE DADOS ---
 
-    # Aggregate data by provider
-    # Ensure all columns used here exist in your actual df. If not, check your load_and_prepare_data function.
-    df_prestadores_agg = df.groupby('nome_do_prestador', observed=True).agg(
+    df_atendimentos_filtrado['nome_do_prestador'] = df_atendimentos_filtrado['nome_do_prestador'].astype(str)
+    if not df_nps_prestador.empty and 'nome_do_prestador' in df_nps_prestador.columns:
+        df_nps_prestador['nome_do_prestador'] = df_nps_prestador['nome_do_prestador'].astype(str)
+        df_merged = pd.merge(df_atendimentos_filtrado, df_nps_prestador[['nome_do_prestador', 'nps_score_calculado']], on='nome_do_prestador', how='left')
+        df_merged['nps_score_calculado'] = df_merged['nps_score_calculado'].fillna(0)
+    else:
+        df_merged = df_atendimentos_filtrado.copy()
+        df_merged['nps_score_calculado'] = 0
+
+    df_prestadores_agg = df_merged.groupby('nome_do_prestador', observed=True).agg(
         total_atendimentos=('protocolo_atendimento', 'nunique'),
-        media_nps=('nps_score_calculado', 'mean'), # Make sure 'nps_score_calculado' exists and is numeric
-        num_reembolsos=('is_reembolso', 'sum'), # Make sure 'is_reembolso' exists and is numeric (0/1)
-        num_intermediacoes=('is_intermediacao', 'sum'), # Make sure 'is_intermediacao' exists and is numeric (0/1)
-        media_tempo_chegada=('tempo_chegada_min', 'mean') # Make sure 'tempo_chegada_min' exists and is numeric
+        media_nps=('nps_score_calculado', 'mean'),
+        num_reembolsos=('is_reembolso', 'sum'),
+        num_intermediacoes=('is_intermediacao', 'sum'),
+        media_tempo_chegada=('tempo_chegada_min', 'mean')
     ).reset_index()
 
-    # Filter out providers with insufficient attendances for a meaningful score
-    # Use .copy() to avoid SettingWithCopyWarning
-    df_prestadores_agg = df_prestadores_agg[df_prestadores_agg['total_atendimentos'] >= MIN_ATTENDANCES_FOR_RANKING].copy()
 
-    if df_prestadores_agg.empty:
-        st.info(f"Nenhum prestador com mais de {MIN_ATTENDANCES_FOR_RANKING} atendimento(s) encontrado com os filtros aplicados.")
+    # APLICAÇÃO DO FILTRO DE MÍNIMO DE ATENDIMENTOS
+    df_prestadores_filtrado = df_prestadores_agg[df_prestadores_agg['total_atendimentos'] >= min_atendimentos].copy()
+
+    if df_prestadores_filtrado.empty:
+        st.warning(f"Nenhum prestador encontrado com {min_atendimentos} ou mais atendimentos para os filtros aplicados.")
         return
 
-    # Calculate percentages for reimbursement and intermediation
-    df_prestadores_agg['pct_reembolso'] = np.where(
-        df_prestadores_agg['total_atendimentos'] > 0,
-        (df_prestadores_agg['num_reembolsos'] / df_prestadores_agg['total_atendimentos']) * 100,
-        0
-    )
-    df_prestadores_agg['pct_intermediacao'] = np.where(
-        df_prestadores_agg['total_atendimentos'] > 0,
-        (df_prestadores_agg['num_intermediacoes'] / df_prestadores_agg['total_atendimentos']) * 100,
-        0
-    )
+    df_prestadores_filtrado['pct_reembolso'] = (df_prestadores_filtrado['num_reembolsos'] / df_prestadores_filtrado['total_atendimentos'] * 100).fillna(0)
+    df_prestadores_filtrado['pct_intermediacao'] = (df_prestadores_filtrado['num_intermediacoes'] / df_prestadores_filtrado['total_atendimentos'] * 100).fillna(0)
+    
+    df_prestadores_scored = calculate_prestador_score(df_prestadores_filtrado)
+    df_prestadores_scored['sugestao_acao'] = df_prestadores_scored.apply(lambda row: get_prestador_sugestao_acao(row, df_prestadores_scored), axis=1)
 
-    # Fill NaNs for mean values if no data exists for a provider for that metric
-    # Crucial for calculations and display
-    df_prestadores_agg['media_nps'] = df_prestadores_agg['media_nps'].fillna(0)
-    df_prestadores_agg['media_tempo_chegada'] = df_prestadores_agg['media_tempo_chegada'].fillna(df_prestadores_agg['media_tempo_chegada'].mean()) # Fill with overall mean or 0 if mean is not desired for NaNs
-
-    # Calculate the composite score for each provider
-    df_prestadores_scored = calculate_prestador_score(df_prestadores_agg)
-
+    # --- KPIs GERAIS DA REDE ---
     st.markdown("---")
-    st.subheader("Desempenho Geral dos Prestadores")
-    col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5, col_kpi6 = st.columns(6) # Increased columns for more KPIs
-    col_kpi1.metric("Média de Atendimentos por Prestador", f"{df_prestadores_scored['total_atendimentos'].mean():,.0f}")
-    col_kpi2.metric("Média de NPS", f"{df_prestadores_scored['media_nps'].mean():.1f}")
-    col_kpi3.metric("Média de TMC (min)", f"{df_prestadores_scored['media_tempo_chegada'].mean():.0f}")
-    col_kpi4.metric("Média % Reembolso", f"{df_prestadores_scored['pct_reembolso'].mean():.2f}%") # New KPI
-    col_kpi5.metric("Média % Intermediação", f"{df_prestadores_scored['pct_intermediacao'].mean():.2f}%") # New KPI
-    col_kpi6.metric("Média Score Prestador", f"{df_prestadores_scored['score_prestador'].mean():.2f}")
+    st.subheader("Desempenho Geral da Rede")
+    
+    avg_score = df_prestadores_scored['score_prestador'].mean()
+    avg_atendimentos = df_prestadores_scored['total_atendimentos'].mean()
+    avg_nps = df_prestadores_scored['media_nps'].mean()
+    avg_tmc = df_prestadores_scored['media_tempo_chegada'].mean()
+    
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Score Médio da Rede", f"{avg_score:.2f}")
+    col2.metric("Média de Atendimentos", f"{avg_atendimentos:.1f}")
+    col3.metric("NPS Médio", f"{avg_nps:.1f}")
+    col4.metric("TMC Médio (min)", f"{avg_tmc:.0f}")
 
-   
-
+    # --- RANKING COMPLETO DE PRESTADORES ---
     st.markdown("---")
-    st.subheader("Prestadores com Necessidade de Atenção")
-    st.info("Filtre e analise os prestadores que precisam de maior foco para melhorar a qualidade ou eficiência.")
+    st.subheader("Ranking Completo de Prestadores")
+    st.markdown("Análise detalhada de todos os prestadores que atendem aos critérios de filtro. Use as setas para ordenar.")
 
-    df_prestadores_scored['sugestao_acao'] = df_prestadores_scored.apply(get_prestador_sugestao_acao, axis=1)
-
-    # Filter and display 'offenders' based on score and individual metrics
-    df_offenders_prestador = df_prestadores_scored[
-        (df_prestadores_scored['status_score'] == 'Precisa de Atenção') | # Keep score-based filtering for main offenders table
-        (df_prestadores_scored['pct_reembolso'] > df_prestadores_scored['pct_reembolso'].quantile(0.75)) |
-        (df_prestadores_scored['pct_intermediacao'] > df_prestadores_scored['pct_intermediacao'].quantile(0.75)) |
-        (df_prestadores_scored['media_tempo_chegada'] > df_prestadores_scored['media_tempo_chegada'].quantile(0.75)) |
-        (df_prestadores_scored['media_nps'] < df_prestadores_scored['media_nps'].quantile(0.25))
-    ].sort_values('score_prestador', ascending=True).reset_index(drop=True)
-
-    if not df_offenders_prestador.empty:
-        st.dataframe(
-            df_offenders_prestador.rename(columns={
-                'nome_do_prestador': 'Prestador',
-                'total_atendimentos': 'Qtd. Atendimentos',
-                'media_nps': 'NPS Médio',
-                'media_tempo_chegada': 'TMC Médio (min)',
-                'pct_reembolso': '% Reembolso',
-                'pct_intermediacao': '% Intermediação',
-                'score_prestador': 'Score do Prestador',
-                'status_score': 'Status',
-                'sugestao_acao': 'Sugestão de Ação'
-            })[[
-                'Prestador', 'Qtd. Atendimentos', 'NPS Médio', 'TMC Médio (min)',
-                '% Reembolso', '% Intermediação', 'Score do Prestador', 'Status', 'Sugestão de Ação'
-            ]].style.format({
-                'Qtd. Atendimentos': '{:,.0f}',
-                'NPS Médio': '{:.2f}',
-                'TMC Médio (min)': '{:.0f}',
-                '% Reembolso': '{:.2f}%',
-                '% Intermediacao': '{:.2f}%',
-                'Score do Prestador': '{:.2f}'
-            }),
-            use_container_width=True
-        )
-
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df_offenders_prestador.to_excel(writer, index=False, sheet_name='Prestadores Ofensores')
-        output.seek(0)
-        st.download_button(
-            label="Baixar Prestadores com Necessidade de Atenção (XLSX)",
-            data=output,
-            file_name='prestadores_ofensores_score.xlsx',
-            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            help="Baixa os dados dos prestadores identificados com necessidade de atenção em formato XLSX."
-        )
-    else:
-        st.info("Nenhum prestador identificado com necessidade de atenção com base nos critérios atuais.")
-
-   
-
-    st.markdown("---")
-    st.subheader("Todos os Prestadores por Score")
-    st.info("Lista completa de todos os prestadores e seus respectivos scores.")
     st.dataframe(
         df_prestadores_scored.rename(columns={
             'nome_do_prestador': 'Prestador',
-            'total_atendimentos': 'Qtd. Atendimentos',
+            'total_atendimentos': 'Atendimentos',
             'media_nps': 'NPS Médio',
             'media_tempo_chegada': 'TMC Médio (min)',
             'pct_reembolso': '% Reembolso',
             'pct_intermediacao': '% Intermediação',
-            'score_prestador': 'Score do Prestador',
+            'score_prestador': 'Score',
             'status_score': 'Status'
         })[[
-            'Prestador', 'Qtd. Atendimentos', 'NPS Médio', 'TMC Médio (min)',
-            '% Reembolso', '% Intermediação', 'Score do Prestador', 'Status'
-        ]].sort_values('Score do Prestador', ascending=False).style.format({
-            'Qtd. Atendimentos': '{:,.0f}',
+            'Prestador', 'Score', 'Status', 'Atendimentos', 'NPS Médio', 'TMC Médio (min)',
+            '% Reembolso', '% Intermediação'
+        ]]
+        .sort_values('Score', ascending=True)
+        .style
+        .background_gradient(cmap='RdYlGn', subset=['Score'])
+        .bar(subset=['Atendimentos'], color='#1f77b4')
+        .format({
+            'Score': '{:.2f}',
             'NPS Médio': '{:.2f}',
             'TMC Médio (min)': '{:.0f}',
             '% Reembolso': '{:.2f}%',
-            '% Intermediacao': '{:.2f}%',
-            'Score do Prestador': '{:.2f}'
+            '% Intermediação': '{:.2f}%',
         }),
-        use_container_width=True
+        use_container_width=True,
+        height=600
     )
+    
+    # DOWNLOAD DOS DADOS
     output_all = io.BytesIO()
     with pd.ExcelWriter(output_all, engine='xlsxwriter') as writer:
-        df_prestadores_scored.to_excel(writer, index=False, sheet_name='Score Prestadores Completo')
+        df_prestadores_scored.to_excel(writer, index=False, sheet_name='Score_Prestadores_Completo')
     output_all.seek(0)
     st.download_button(
-        label="Baixar Todos os Scores de Prestadores (XLSX)",
+        label="Baixar Ranking Completo (XLSX)",
         data=output_all,
         file_name='score_prestadores_completo.xlsx',
-        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        help="Baixa todos os dados de score dos prestadores em formato XLSX."
+        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
 
-    with st.expander("💡 Como é calculado o Score do Prestador?"):
+    # --- PLANO DE AÇÃO EM CARDS (APÓS O RANKING) ---
+    st.markdown("---")
+    st.subheader("Plano de Ação: Foco nos Principais Pontos de Melhoria")
+    st.info("Recomendações para os 20 prestadores com os menores scores para direcionamento de ações.")
+    
+    df_offenders = df_prestadores_scored[
+        df_prestadores_scored['status_score'].isin(['Precisa de Atenção', 'Regular'])
+    ].sort_values('score_prestador', ascending=True).head(20)
+
+    if not df_offenders.empty:
+        for index, row in df_offenders.iterrows():
+            with st.container(border=True):
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.markdown(f"**Prestador:** {row['nome_do_prestador']}")
+                    st.markdown(f"**Sugestões:** {row['sugestao_acao']}")
+                with col2:
+                    st.metric(label="Score", value=f"{row['score_prestador']:.2f}")
+                    # Usando st.markdown para o status para evitar o delta/seta
+                    st.markdown(f"**Status:** <span style='color: #d62728;'>{row['status_score']}</span>", unsafe_allow_html=True)
+                
+    else:
+        st.success("🎉 Nenhum prestador com status 'Regular' ou 'Precisa de Atenção' encontrado. Ótimo resultado!")
+
+    # --- EXPANDER COM A METODOLOGIA ---
+    with st.expander("💡 Entenda a Metodologia do Score"):
         st.markdown(r"""
-        O **Score do Prestador** é um índice composto que avalia a performance individual de cada prestador na rede, combinando diversos KPIs importantes:
-        * **Normalização dos Dados:** Todos os componentes são normalizados para uma escala comum (0 a 1) para garantir que cada um contribua proporcionalmente ao score, independentemente de suas unidades originais.
-        * **Componentes e Pesos:**
-            * **Total de Atendimentos (25%):** Um maior volume de atendimentos indica maior contribuição para a rede. (Peso positivo)
-            * **NPS Médio (30%):** Maior NPS (satisfação do cliente) é um forte indicador de qualidade. (Peso positivo)
-            * **Tempo Médio de Chegada (TMC) (20%):** Menor tempo de chegada reflete agilidade e eficiência. (Peso inverso: quanto menor o TMC, maior a contribuição positiva)
-            * **Percentual de Reembolso (15%):** Um menor percentual de serviços que resultam em reembolso indica maior capacidade de resolução direta e satisfação. (Peso inverso)
-            * **Percentual de Intermediação (10%):** Um menor percentual de serviços intermediados significa que o prestador está atendendo diretamente as demandas. (Peso inverso)
+        O **Score do Prestador** é um índice de 0 a 100 que consolida múltiplos KPIs para avaliar a performance.
+
+        - **Componentes e Pesos:**
+          - **Total de Atendimentos (25%):** Maior volume é positivo.
+          - **NPS Médio (30%):** Satisfação do cliente é crucial.
+          - **Tempo Médio de Chegada (TMC) (20%):** Menor tempo é melhor.
+          - **Percentual de Reembolso (15%):** Menor percentual é melhor.
+          - **Percentual de Intermediação (10%):** Menor percentual é melhor.
 
         **Fórmula Simplificada:**
-        $$ \text{Score Prestador} = \left( \text{Atendimentos Normalizados} \times 0.25 \right) + \left( \text{NPS Normalizado} \times 0.30 \right) + \left( (1 - \text{TMC Normalizado}) \times 0.20 \right) + \left( (1 - \text{Reembolso Normalizado}) \times 0.15 \right) + \left( (1 - \text{Intermediação Normalizada}) \times 0.10 \right) $$
-
-        **Classificação do Status do Score:** O status é determinado pelos quartis do Score do Prestador:
-        * **Precisa de Atenção:** Prestadores no quartil inferior (piores 25%).
-        * **Regular:** Prestadores entre o primeiro e o segundo quartil (25% a 50%).
-        * **Bom:** Prestadores entre o segundo e o terceiro quartil (50% a 75%).
-        * **Excelente:** Prestadores no quartil superior (melhores 25%).
-        """)
-    with st.expander("💡 Como são geradas as Sugestões de Ação?"):
-        st.markdown("""
-        As sugestões de ação são geradas dinamicamente para cada prestador com base no seu score e nos seus indicadores específicos:
-        * **Precisa de Atenção:** Se o status do score for 'Precisa de Atenção', a sugestão é 'Avaliar performance geral. Treinamento ou revisão de contrato.'
-        * **Regular:** Se o status do score for 'Regular', a sugestão é 'Otimizar processos para melhoria contínua.'
-        * **Baixo NPS:** Se o NPS Médio for inferior a um limiar (ex: 0), a sugestão é 'Baixo NPS. Investigar causas de insatisfação do cliente.'
-        * **Alto % de Reembolso:** Se o percentual de reembolso for significativamente maior que a média, sugere-se 'Alto % de reembolso. Rever processos ou precificação.'
-        * **Alto % de Intermediação:** Se o percentual de intermediação for significativamente maior que a média, sugere-se 'Alto % de intermediação. Aumentar capacidade ou eficiência.'
-        * **Alto Tempo de Chegada (TMC):** Se o tempo médio de chegada for superior a um limiar (ex: 60 minutos), sugere-se 'Alto TMC. Otimizar logística ou realocar prestador.'
+        $$ \text{Score} = f(\text{Atendimentos}, \text{NPS}, \text{TMC}, \text{Reembolso}, \text{Intermediação}) $$
         """)
 
-def page_qualidade_nps(df: pd.DataFrame) -> None:
-    """Renderiza a página de Qualidade (NPS e TMC)."""
-    st.title("✨ Qualidade (NPS & TMC)")
-    st.markdown("Avalie a satisfação do cliente (NPS) e a eficiência no tempo de chegada (TMC) para identificar oportunidades de melhoria.")
+def page_qualidade_nps(df_atendimentos_filtrado, df_nps_cidade_full, df_nps_prestador):
+    st.title("Qualidade")
+    st.markdown("Esta seção exibe a evolução do Net Promoter Score (NPS), o Tempo Médio de Chegada do Prestador e os rankings de qualidade por cidade e prestador.")
 
-    # Injeta CSS personalizado, se houver
-    # inject_css() # Descomente se tiver essa função
+    def format_pt_br(value, precision=0):
+        if pd.isna(value):
+            return "N/A"
+        if precision == 0:
+            formatted = f"{value:,.0f}"
+        else:
+            formatted = f"{value:,.{precision}f}"
+        return formatted.replace(",", "X").replace(".", ",").replace("X", ".")
 
-    # --- Sidebar de Filtros ---
-    st.sidebar.title("Opções de Filtro")
-    # st.sidebar.image("C:\\Temp\\logo.png", use_container_width=False, width=1000) # Verifique o caminho da imagem
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("Filtros de Dados")
+    if not df_nps_cidade_full.empty:
+        if pd.api.types.is_period_dtype(df_nps_cidade_full['mes_ano']):
+            df_nps_cidade_full['mes_ano_dt'] = df_nps_cidade_full['mes_ano'].dt.to_timestamp()
+        else:
+            df_nps_cidade_full['mes_ano_dt'] = pd.to_datetime(df_nps_cidade_full['mes_ano'], errors='coerce')
 
-    # Garante que 'data_abertura_atendimento' é datetime para min/max
-    df['data_abertura_atendimento'] = pd.to_datetime(df['data_abertura_atendimento'])
+
+        df_nps_evolucao = df_nps_cidade_full.groupby('mes_ano_dt').agg(
+            promotores=('nps_promotores', 'sum'),
+            detratores=('nps_detratores', 'sum'),
+            neutros=('nps_neutros', 'sum')
+        ).reset_index()
+
+        df_nps_evolucao['total_responses'] = df_nps_evolucao['promotores'] + df_nps_evolucao['detratores'] + df_nps_evolucao['neutros']
+        df_nps_evolucao['nps_score'] = np.where(
+            df_nps_evolucao['total_responses'] > 0,
+            ((df_nps_evolucao['promotores'] - df_nps_evolucao['detratores']) / df_nps_evolucao['total_responses']) * 100,
+            np.nan
+        )
+        df_nps_evolucao = df_nps_evolucao.dropna(subset=['nps_score']).sort_values('mes_ano_dt')
+
+        st.markdown("---")
+        st.subheader("Evolução do Net Promoter Score (NPS) Geral")
+        if not df_nps_evolucao.empty:
+            fig_nps = px.line(
+                df_nps_evolucao,
+                x='mes_ano_dt',
+                y='nps_score',
+                title='Evolução Mensal do NPS Geral',
+                labels={'mes_ano_dt': 'Mês/Ano', 'nps_score': 'NPS'},
+                markers=True
+            )
+            fig_nps.update_xaxes(dtick="M1", tickformat="%b\n%Y")
+            fig_nps.update_yaxes(range=[-100, 100])
+            st.plotly_chart(fig_nps, use_container_width=True)
+        else:
+            st.info("Nenhum dado disponível para a evolução mensal do NPS.")
+    else:
+        st.info("Nenhum dado de NPS por cidade disponível para calcular a evolução do NPS geral.")
     
-    # Filtros
-    segmento_selecionado = st.sidebar.multiselect(
-        "Filtrar por Segmento",
-        options=[ALL_OPTION] + sorted(df['segmento'].dropna().unique().tolist()),
-        default=[ALL_OPTION],
-        key="qualidade_segmento"
-    )
-    if ALL_OPTION in segmento_selecionado:
-        segmento_selecionado = df['segmento'].dropna().unique().tolist()
-
-    seguradora_selecionada = st.sidebar.multiselect(
-        "Filtrar por Seguradora",
-        options=[ALL_OPTION] + sorted(df['seguradora'].dropna().unique().tolist()),
-        default=[ALL_OPTION],
-        key="qualidade_seguradora"
-    )
-    if ALL_OPTION in seguradora_selecionada:
-        seguradora_selecionada = df['seguradora'].dropna().unique().tolist()
-
-    estado_selecionado = st.sidebar.multiselect(
-        "Filtrar por Estado",
-        options=[ALL_OPTION] + sorted(df['uf'].dropna().unique().tolist()),
-        default=[ALL_OPTION],
-        key="qualidade_estado"
-    )
-    if ALL_OPTION in estado_selecionado:
-        estado_selecionado = df['uf'].dropna().unique().tolist()
-
-    municipio_selecionado = st.sidebar.multiselect(
-        "Filtrar por Cidade",
-        options=[ALL_OPTION] + sorted(df['municipio'].dropna().unique().tolist()),
-        default=[ALL_OPTION],
-        key="qualidade_municipio"
-    )
-    if ALL_OPTION in municipio_selecionado:
-        municipio_selecionado = df['municipio'].dropna().unique().tolist()
-
-    min_date_data = df['data_abertura_atendimento'].min().date()
-    max_date_data = df['data_abertura_atendimento'].max().date()
-    data_inicio, data_fim = st.sidebar.date_input(
-        "Período de Análise",
-        value=(min_date_data, max_date_data),
-        min_value=min_date_data,
-        max_value=max_date_data,
-        key="qualidade_data_range"
-    )
-
-    df_filtered = apply_filters(df, segmento_selecionado, seguradora_selecionada, estado_selecionado, municipio_selecionado, data_inicio, data_fim)
-
-    if df_filtered.empty:
-        st.warning("Nenhum dado encontrado para os filtros selecionados. Ajuste os filtros para ver os resultados.")
-        return
-
-    # --- Carregar Dados Pré-processados para Rankings (melhora performance) ---
-    # Certifique-se de que esses arquivos existam e estejam no caminho correto.
-    try:
-        df_nps_cidade_pre = pd.read_parquet("https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_nps_by_city.parquet")
-        df_nps_prestador_pre = pd.read_parquet("https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_nps_by_provider.parquet")
-
-        # Garante que 'mes_ano' é datetime para filtragem
-        df_nps_cidade_pre['mes_ano'] = pd.to_datetime(df_nps_cidade_pre['mes_ano'])
-        df_nps_prestador_pre['mes_ano'] = pd.to_datetime(df_nps_prestador_pre['mes_ano'])
-
-        # Filtrar os dados pré-processados pelo período selecionado
-        df_nps_cidade_pre_filtered = df_nps_cidade_pre[
-            (df_nps_cidade_pre['mes_ano'].dt.date >= data_inicio) &
-            (df_nps_cidade_pre['mes_ano'].dt.date <= data_fim)
-        ].copy()
-
-        df_nps_prestador_pre_filtered = df_nps_prestador_pre[
-            (df_nps_prestador_pre['mes_ano'].dt.date >= data_inicio) &
-            (df_nps_prestador_pre['mes_ano'].dt.date <= data_fim)
-        ].copy()
-
-    except FileNotFoundError:
-        st.error("Arquivos de dados pré-processados de NPS não encontrados. Verifique os caminhos: 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_nps_by_city.parquet' e 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_nps_by_provider.parquet'.")
-        return
-
-
-    # --- TOP CIDADES OFENSORAS E MELHORES NPS ---
     st.markdown("---")
-    st.header("Cidades: Piores e Melhores NPS")
-    st.info("Identifique cidades com baixo NPS para ações focadas e celebre as de alto desempenho.")
-    # Filtrar por um número mínimo de avaliações para relevância
-    min_nps_evaluations_city = st.number_input("Mín. Avaliações (Cidades)", min_value=1, value=5, key="min_eval_city_nps")
-  
-    col_nps_cidade_low, col_nps_cidade_high = st.columns(2)
+    st.subheader("NPS por Cidade")
+    st.info("Visualize as cidades com melhor e pior desempenho no NPS. Isso pode indicar onde focar esforços de melhoria de serviço.")
 
-    with col_nps_cidade_low:
-        st.subheader("Cidades com Pior NPS")
-      
-        # Filtra os dados pré-processados e agrega por município para o NPS final (se não já agregado)
-        df_nps_cidade_agg = df_nps_cidade_pre_filtered.groupby(['municipio', 'uf']).agg(
-            total_avaliacoes=('nps_detratores', 'count'), # Usa qualquer coluna para contar o total de respostas
-            nps_score=('nps_score_calculado', 'mean')
+    if df_nps_cidade_full.empty:
+        st.warning("Nenhum dado de NPS por cidade disponível para esta análise. Verifique o arquivo 'processed_nps_by_city.parquet'.")
+    else:
+        df_nps_cidade_agg = df_nps_cidade_full.groupby('municipio', observed=True).agg(
+            promotores=('nps_promotores', 'sum'),
+            detratores=('nps_detratores', 'sum'),
+            neutros=('nps_neutros', 'sum')
         ).reset_index()
 
-        df_nps_cidade_low = df_nps_cidade_agg[df_nps_cidade_agg['total_avaliacoes'] >= min_nps_evaluations_city] \
-                                .sort_values('nps_score', ascending=True).head(10).copy()
-
-        if not df_nps_cidade_low.empty:
-            st.dataframe(
-                df_nps_cidade_low.rename(columns={'municipio': 'Cidade', 'uf': 'UF', 'total_avaliacoes': 'Qtd. Avaliações', 'nps_score': 'NPS'}).style.format({
-                    'Qtd. Avaliações': '{:,.0f}',
-                    'NPS': '{:,.1f}'
-                }),
-                use_container_width=True
-            )
-        else:
-            st.info("Nenhuma cidade encontrada com baixo NPS e número mínimo de avaliações.")
-
-    with col_nps_cidade_high:
-        st.subheader("Cidades com Melhor NPS")
-        df_nps_cidade_high = df_nps_cidade_agg[df_nps_cidade_agg['total_avaliacoes'] >= min_nps_evaluations_city] \
-                                .sort_values('nps_score', ascending=False).head(10).copy()
-
-        if not df_nps_cidade_high.empty:
-            st.dataframe(
-                df_nps_cidade_high.rename(columns={'municipio': 'Cidade', 'uf': 'UF', 'total_avaliacoes': 'Qtd. Avaliações', 'nps_score': 'NPS'}).style.format({
-                    'Qtd. Avaliações': '{:,.0f}',
-                    'NPS': '{:,.1f}'
-                }),
-                use_container_width=True
-            )
-        else:
-            st.info("Nenhuma cidade encontrada com alto NPS e número mínimo de avaliações.")
-
-    # --- TOP PRESTADORES OFENSORES E MELHORES NPS ---
-    st.markdown("---")
-    st.header("Prestadores: Piores e Melhores NPS")
-    st.info("Identifique prestadores que impactam negativamente o NPS e reconheça os de melhor desempenho.")
-    min_nps_evaluations_provider = st.number_input("Mín. Avaliações (Prestadores)", min_value=1, value=5, key="min_eval_provider_nps")
-
-    col_nps_prestador_low, col_nps_prestador_high = st.columns(2)
-
-    with col_nps_prestador_low:
-        st.subheader("Prestadores com Pior NPS")
+        df_nps_cidade_agg['total_avaliacoes'] = df_nps_cidade_agg['promotores'] + df_nps_cidade_agg['detratores'] + df_nps_cidade_agg['neutros']
+        df_nps_cidade_agg['nps_score'] = np.where(
+            df_nps_cidade_agg['total_avaliacoes'] > 0,
+            ((df_nps_cidade_agg['promotores'] - df_nps_cidade_agg['detratores']) / df_nps_cidade_agg['total_avaliacoes']) * 100,
+            np.nan
+        )
         
-        # Filtra os dados pré-processados e agrega por prestador para o NPS final
-        df_nps_prestador_agg = df_nps_prestador_pre_filtered.groupby('nome_do_prestador').agg(
-            total_avaliacoes=('nps_detratores', 'count'), # Usa qualquer coluna para contar o total de respostas
-            nps_score=('nps_score_calculado', 'mean')
+        df_nps_cidade_agg = df_nps_cidade_agg.dropna(subset=['nps_score'])
+
+        min_avaliacoes_cidade = st.slider("Mínimo de Avaliações para Cidades", min_value=1, max_value=50, value=10, key="min_eval_city_nps_table")
+        df_nps_cidade_filtered = df_nps_cidade_agg[df_nps_cidade_agg['total_avaliacoes'] >= min_avaliacoes_cidade]
+
+        if not df_nps_cidade_filtered.empty:
+            col_nps_best_city, col_nps_worst_city = st.columns(2)
+
+            with col_nps_best_city:
+                st.markdown("#### Top 10 Cidades (Melhor NPS)")
+                st.dataframe(
+                    df_nps_cidade_filtered.sort_values('nps_score', ascending=False).head(10)
+                    .rename(columns={'municipio': 'Cidade', 'nps_score': 'NPS Médio', 'total_avaliacoes': 'Qtd. Avaliações'}).style.format({
+                        'NPS Médio': lambda x: format_pt_br(x, 1),
+                        'Qtd. Avaliações': lambda x: format_pt_br(x, 0)
+                    }),
+                    use_container_width=True
+                )
+            with col_nps_worst_city:
+                st.markdown("#### Top 10 Cidades (Pior NPS)")
+                st.dataframe(
+                    df_nps_cidade_filtered.sort_values('nps_score', ascending=True).head(10)
+                    .rename(columns={'municipio': 'Cidade', 'nps_score': 'NPS Médio', 'total_avaliacoes': 'Qtd. Avaliações'}).style.format({
+                        'NPS Médio': lambda x: format_pt_br(x, 1),
+                        'Qtd. Avaliações': lambda x: format_pt_br(x, 0)
+                    }),
+                    use_container_width=True
+                )
+        else:
+            st.info(f"Nenhuma cidade encontrada com NPS calculado e pelo menos {min_avaliacoes_cidade} avaliações.")
+        st.markdown("**Sugestão:** Implementar programas de incentivo ou treinamento nas cidades com baixo NPS, e replicar as melhores práticas das cidades com alto NPS.")
+
+
+    st.markdown("---")
+    st.subheader("NPS por Prestador")
+    st.info("Identifique os prestadores com melhor e pior performance no NPS. Use esta informação para reconhecimento ou para planos de desenvolvimento.")
+
+    if df_nps_prestador.empty:
+        st.warning("Nenhum dado de NPS por prestador disponível para esta análise. Verifique o arquivo 'processed_nps_by_provider.parquet'.")
+    else:
+        df_nps_prestador_agg = df_nps_prestador.groupby('nome_do_prestador', observed=True).agg(
+            promotores=('nps_promotores', 'sum'),
+            detratores=('nps_detratores', 'sum'),
+            neutros=('nps_neutros', 'sum')
         ).reset_index()
 
-        df_nps_prestador_low = df_nps_prestador_agg[df_nps_prestador_agg['total_avaliacoes'] >= min_nps_evaluations_provider] \
-                                .sort_values('nps_score', ascending=True).head(10).copy()
+        df_nps_prestador_agg['total_avaliacoes'] = df_nps_prestador_agg['promotores'] + df_nps_prestador_agg['detratores'] + df_nps_prestador_agg['neutros']
+        df_nps_prestador_agg['nps_score'] = np.where(
+            df_nps_prestador_agg['total_avaliacoes'] > 0,
+            ((df_nps_prestador_agg['promotores'] - df_nps_prestador_agg['detratores']) / df_nps_prestador_agg['total_avaliacoes']) * 100,
+            np.nan
+        )
 
-        if not df_nps_prestador_low.empty:
-            st.dataframe(
-                df_nps_prestador_low.rename(columns={'nome_do_prestador': 'Prestador', 'total_avaliacoes': 'Qtd. Avaliações', 'nps_score': 'NPS'}).style.format({
-                    'Qtd. Avaliações': '{:,.0f}',
-                    'NPS': '{:,.1f}'
-                }),
-                use_container_width=True
-            )
+        df_nps_prestador_agg = df_nps_prestador_agg.dropna(subset=['nps_score'])
+
+        min_avaliacoes_prestador = st.slider("Mínimo de Avaliações para Prestadores", min_value=1, max_value=50, value=10, key="min_eval_provider_nps_table")
+        df_nps_prestador_filtered = df_nps_prestador_agg[df_nps_prestador_agg['total_avaliacoes'] >= min_avaliacoes_prestador]
+
+        if not df_nps_prestador_filtered.empty:
+            col_nps_best_prestador, col_nps_worst_prestador = st.columns(2)
+
+            with col_nps_best_prestador:
+                st.markdown("#### Top 10 Prestadores (Melhor NPS)")
+                st.dataframe(
+                    df_nps_prestador_filtered.sort_values('nps_score', ascending=False).head(10)
+                    .rename(columns={'nome_do_prestador': 'Prestador', 'nps_score': 'NPS Médio', 'total_avaliacoes': 'Qtd. Avaliações'}).style.format({
+                        'NPS Médio': lambda x: format_pt_br(x, 1),
+                        'Qtd. Avaliações': lambda x: format_pt_br(x, 0)
+                    }),
+                    use_container_width=True
+                )
+            with col_nps_worst_prestador:
+                st.markdown("#### Top 10 Prestadores (Pior NPS)")
+                st.dataframe(
+                    df_nps_prestador_filtered.sort_values('nps_score', ascending=True).head(10)
+                    .rename(columns={'nome_do_prestador': 'Prestador', 'nps_score': 'NPS Médio', 'total_avaliacoes': 'Qtd. Avaliações'}).style.format({
+                        'NPS Médio': lambda x: format_pt_br(x, 1),
+                        'Qtd. Avaliações': lambda x: format_pt_br(x, 0)
+                    }),
+                    use_container_width=True
+                )
         else:
-            st.info("Nenhum prestador encontrado com baixo NPS e número mínimo de avaliações.")
+            st.info(f"Nenhum prestador encontrado com NPS calculado e pelo menos {min_avaliacoes_prestador} avaliações.")
+        st.markdown("**Sugestão:** Avaliar treinamentos específicos ou programas de mentoria para prestadores com baixo NPS. Reconhecer e aprender com os de alto desempenho.")
 
-    with col_nps_prestador_high:
-        st.subheader("Prestadores com Melhor NPS")
-        df_nps_prestador_high = df_nps_prestador_agg[df_nps_prestador_agg['total_avaliacoes'] >= min_nps_evaluations_provider] \
-                                .sort_values('nps_score', ascending=False).head(10).copy()
-
-        if not df_nps_prestador_high.empty:
-            st.dataframe(
-                df_nps_prestador_high.rename(columns={'nome_do_prestador': 'Prestador', 'total_avaliacoes': 'Qtd. Avaliações', 'nps_score': 'NPS'}).style.format({
-                    'Qtd. Avaliações': '{:,.0f}',
-                    'NPS': '{:,.1f}'
-                }),
-                use_container_width=True
-            )
-        else:
-            st.info("Nenhum prestador encontrado com alto NPS e número mínimo de avaliações.")
-
-    # --- Distribuição do TMC 
     st.markdown("---")
     st.header("Distribuição do TMC por Segmento e Seguradora")
 
-    col_tmc_segmento, col_tmc_seguradora = st.columns(2)
+    if df_atendimentos_filtrado.empty or 'tempo_chegada_min' not in df_atendimentos_filtrado.columns:
+        st.warning("Dados de atendimentos ou coluna 'tempo_chegada_min' não disponíveis para a análise de TMC.")
+    else:
+        col_tmc_segmento, col_tmc_seguradora = st.columns(2)
 
-    with col_tmc_segmento:
-        st.subheader("TMC por Segmento")
-        tmc_por_segmento = df_filtered.groupby('segmento')['tempo_chegada_min'].mean().reset_index()
-        tmc_por_segmento['tempo_chegada_min'] = tmc_por_segmento['tempo_chegada_min'].fillna(0)
-        st.dataframe(
-            tmc_por_segmento.rename(columns={'tempo_chegada_min': 'TMC Médio (min)'}).style.format(
-                {'TMC Médio (min)': '{:.0f}'}
-            ),
-            use_container_width=True
-        )
+        with col_tmc_segmento:
+            st.subheader("TMC por Segmento")
+            tmc_por_segmento = df_atendimentos_filtrado.groupby('segmento', observed=True)['tempo_chegada_min'].mean().reset_index()
+            tmc_por_segmento['tempo_chegada_min'] = tmc_por_segmento['tempo_chegada_min'].fillna(0)
+            st.dataframe(
+                tmc_por_segmento.rename(columns={'tempo_chegada_min': 'TMC Médio (min)'}).style.format(
+                    {'TMC Médio (min)': lambda x: format_pt_br(x, 0)}
+                ),
+                use_container_width=True
+            )
 
-    with col_tmc_seguradora:
-        st.subheader("TMC por Seguradora")
-        tmc_por_seguradora = df_filtered.groupby('seguradora')['tempo_chegada_min'].mean().reset_index()
-        tmc_por_seguradora['tempo_chegada_min'] = tmc_por_seguradora['tempo_chegada_min'].fillna(0)
-        st.dataframe(
-            tmc_por_seguradora.rename(columns={'tempo_chegada_min': 'TMC Médio (min)'}).style.format(
-                {'TMC Médio (min)': '{:.0f}'}
-            ),
-            use_container_width=True
-        )
-     
-# --- Main ---
+        with col_tmc_seguradora:
+            st.subheader("TMC por Seguradora")
+            tmc_por_seguradora = df_atendimentos_filtrado.groupby('seguradora', observed=True)['tempo_chegada_min'].mean().reset_index()
+            tmc_por_seguradora['tempo_chegada_min'] = tmc_por_seguradora['tempo_chegada_min'].fillna(0)
+            st.dataframe(
+                tmc_por_seguradora.rename(columns={'tempo_chegada_min': 'TMC Médio (min)'}).style.format(
+                    {'TMC Médio (min)': lambda x: format_pt_br(x, 0)}
+                ),
+                use_container_width=True
+            )
+
 def main():
-    inject_css()
+    # Inicializa o estado de login
+    if 'logged_in' not in st.session_state:
+        st.session_state['logged_in'] = False
 
-    if not st.session_state.get('logged_in'):
+    if not st.session_state['logged_in']:
         login_page()
     else:
-        # --- PARTE 1: Score e Logo ---
-        st.sidebar.markdown(
-            "<h2 style='color: #000000; text-align: center; font-size: 1.5rem;'>Score do Prestador</h2>",
-            unsafe_allow_html=True
-        )
-        st.sidebar.image("https://github.com/vinikrebs/ScrorePrestador/raw/main/logo.png", use_container_width=False, width=1000)
+        # Carrega os dados em cache
+        with st.spinner("Carregando e processando dados..."):
+            df_atendimentos_full, df_nps_cidade_full, df_nps_prestador = load_and_prepare_data(
+                ATENDIMENTO_FILE_PATH, NPS_CIDADE_PATH, NPS_PRESTADOR_PATH
+            )
+        
+        if df_atendimentos_full.empty:
+            st.error("Nenhum dado de atendimentos válido disponível. Verifique o arquivo de origem.")
+            st.stop()
 
+        # --- BARRA LATERAL ESTRUTURADA ---
         with st.sidebar:
+            st.markdown("<h1 style='text-align: center;'>Score do Prestador</h1>", unsafe_allow_html=True)
+            # 1. CABEÇALHO COM LOGO E TÍTULO
+            try:
+                st.image(LOGO_PATH)
+                st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
+            except FileNotFoundError:
+                st.warning("Arquivo 'logo.png' não encontrado. Coloque-o na mesma pasta do script.")
+            
+
+            # 2. MENU DE NAVEGAÇÃO PRINCIPAL
             selected_page = option_menu(
                 menu_title=None,
-                options=["Informações", "Capilaridade", "Financeiro", "Score Prestador", "Qualidade"],
-                icons=["info-circle-fill", "globe", "currency-dollar", "graph-up", "award"],
+                # Ordem ajustada para manter todas as páginas
+                options=["Informações", "Score Prestador", "Capilaridade", "Financeiro", "Qualidade"], 
+                # Ícones correspondentes à nova ordem
+                icons=["info-circle-fill", "graph-up-arrow", "globe2", "currency-dollar", "award"], 
                 menu_icon="cast",
                 default_index=0,
                 styles={
-                    "container": {"padding": "0!important", "background-color": "#FFFFFF", "box-shadow": "0px 0px 10px rgba(0, 0, 0, 0.1)"},
+                    "container": {"padding": "0!important", "background-color": "#FFFFFF"},
                     "icon": {"color": "#2021D4", "font-size": "20px"},
-                    "nav-link": {"font-size": "16px", "text-align": "left", "margin":"0px", "--hover-color": "#E6F0F8", "color": "#333333"},
-                    "nav-link-selected": {"background-color": "white", "color": "#2021D4", "font-weight": "bold"},
+                    "nav-link": {"font-size": "16px", "text-align": "left", "margin":"0px", "--hover-color": "#E6F0F8"},
+                    "nav-link-selected": {"background-color": "#2021D4", "color": "white", "font-weight": "bold"},
+                    "icon-selected": {"color": "white"},
                 }
             )
 
-        # --- PARTE 2: Filtros centrais (Capilaridade e Financeiro) ---
-        # Filtros compartilhados
-        with st.sidebar:
+
+            # 3. FILTROS DE DADOS
             st.markdown("### ⚙️ Filtros de Dados")
-            # Filtros Capilaridade e Financeiro (compartilhados)
-            # You need df_atendimentos to be available here. It's usually loaded outside main
-            # or passed as an argument. Assuming it's a global variable here due to previous context.
-            global df_atendimentos # Ensure df_atendimentos is accessible
+            
+            segmento_options = [ALL_OPTION] + sorted(df_atendimentos_full['segmento'].dropna().unique().tolist())
+            seguradora_options = [ALL_OPTION] + sorted(df_atendimentos_full['seguradora'].dropna().unique().tolist())
+            estado_options = [ALL_OPTION] + sorted(df_atendimentos_full['uf'].dropna().unique().tolist())
+            
+            min_date_data = df_atendimentos_full['data_abertura_atendimento'].min().date()
+            max_date_data = df_atendimentos_full['data_abertura_atendimento'].max().date()
 
-            segmento_options = [ALL_OPTION] + sorted(df_atendimentos['segmento'].dropna().unique().tolist())
-            seguradora_options = [ALL_OPTION] + sorted(df_atendimentos['seguradora'].dropna().unique().tolist())
-            estado_options = [ALL_OPTION] + sorted(df_atendimentos['uf'].dropna().unique().tolist())
-            municipio_options = [ALL_OPTION] + sorted(df_atendimentos['municipio'].dropna().unique().tolist())
-            min_date_data = df_atendimentos['data_abertura_atendimento'].min().date()
-            max_date_data = df_atendimentos['data_abertura_atendimento'].max().date()
-
-            segmento_selecionado = st.multiselect(
-                "Filtrar por Segmento",
-                options=segmento_options,
-                default=[ALL_OPTION],
-                key="sidebar_segmento"
-            )
+            segmento_selecionado = st.multiselect("Segmento", segmento_options, default=[ALL_OPTION])
             if ALL_OPTION in segmento_selecionado:
-                segmento_selecionado = df_atendimentos['segmento'].dropna().unique().tolist()
+                segmento_selecionado = df_atendimentos_full['segmento'].dropna().unique().tolist()
 
-            seguradora_selecionada = st.multiselect(
-                "Filtrar por Seguradora",
-                options=seguradora_options,
-                default=[ALL_OPTION],
-                key="sidebar_seguradora"
-            )
+            seguradora_selecionada = st.multiselect("Seguradora", seguradora_options, default=[ALL_OPTION])
             if ALL_OPTION in seguradora_selecionada:
-                seguradora_selecionada = df_atendimentos['seguradora'].dropna().unique().tolist()
+                seguradora_selecionada = df_atendimentos_full['seguradora'].dropna().unique().tolist()
 
-            estado_selecionado = st.multiselect(
-                "Filtrar por Estado",
-                options=estado_options,
-                default=[ALL_OPTION],
-                key="sidebar_estado"
-            )
+            estado_selecionado = st.multiselect("Estado", estado_options, default=[ALL_OPTION])
             if ALL_OPTION in estado_selecionado:
-                estado_selecionado = df_atendimentos['uf'].dropna().unique().tolist()
+                estado_selecionado = df_atendimentos_full['uf'].dropna().unique().tolist()
 
-            municipio_selecionado = st.multiselect(
-                "Filtrar por Cidade",
-                options=municipio_options,
-                default=[ALL_OPTION],
-                key="sidebar_municipio"
-            )
+            municipio_options = [ALL_OPTION]
+            if estado_selecionado and ALL_OPTION not in estado_selecionado:
+                municipio_options += sorted(df_atendimentos_full[df_atendimentos_full['uf'].isin(estado_selecionado)]['municipio'].dropna().unique().tolist())
+            else:
+                municipio_options += sorted(df_atendimentos_full['municipio'].dropna().unique().tolist())
+            
+            municipio_selecionado = st.multiselect("Cidade", municipio_options, default=[ALL_OPTION])
             if ALL_OPTION in municipio_selecionado:
-                municipio_selecionado = df_atendimentos['municipio'].dropna().unique().tolist()
+                municipio_selecionado = df_atendimentos_full['municipio'].dropna().unique().tolist()
 
             data_inicio, data_fim = st.date_input(
                 "Período de Análise",
                 value=(min_date_data, max_date_data),
                 min_value=min_date_data,
                 max_value=max_date_data,
-                key="sidebar_data_range"
+                format="DD/MM/YYYY"
             )
 
-            # Slider moved to sidebar
-            min_atendimentos_cidade_sidebar = st.slider(
-                "Mínimo de Atendimentos por Cidade para Análise",
-                min_value=1,
-                max_value=200,
-                value=MIN_ATTENDANCES_FOR_CITY_ANALYSIS,
-                help="Cidades com número de atendimentos abaixo deste valor não serão incluídas na análise de capilaridade detalhada."
-            )
+            # 4. RODAPÉ COM DATA DE ATUALIZAÇÃO E BOTÃO SAIR
+            st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
+            st.caption("Última Atualização: 09/07/2025") 
 
-            st.markdown("---")
-
-        # --- PARTE 3: Botões de navegação e logoff ---
-
-            st.write(f"Última Atualização: {datetime.date.today().strftime('%d/%m/%Y')}")
-            if st.button("Sair", key="logoff_button_sidebar_global"):
+            if st.button("Sair", use_container_width=True):
                 st.session_state['logged_in'] = False
                 st.session_state.pop('username', None)
                 st.rerun()
+            
+            
 
-        # --- Aplicação dos filtros globais nas páginas relevantes ---
-        df_filtered = apply_filters(
-            df_atendimentos,
+        # --- APLICAÇÃO DOS FILTROS ---
+        df_filtrado = apply_filters(
+            df_atendimentos_full,
             segmento_selecionado,
             seguradora_selecionada,
             estado_selecionado,
@@ -1735,17 +1594,25 @@ def main():
             data_inicio,
             data_fim
         )
-
+        
+        if df_filtrado.empty:
+            st.info("Nenhum dado corresponde aos filtros selecionados.")
+        
+        # --- RENDERIZAÇÃO DA PÁGINA SELECIONADA (TODAS AS OPÇÕES RESTAURADAS) ---
         if selected_page == "Informações":
             page_informacao()
-        elif selected_page == "Capilaridade":
-            page_capilaridade(df_filtered, min_atendimentos_cidade_sidebar)
-        elif selected_page == "Financeiro":
-            page_financeiro(df_filtered)
         elif selected_page == "Score Prestador":
-            page_score_prestador(df_filtered) # <-- Corrected line!
+            page_score_prestador(df_filtrado, df_nps_prestador)
+        elif selected_page == "Capilaridade":
+            page_capilaridade(df_filtrado)
+        elif selected_page == "Financeiro":
+            page_financeiro(df_filtrado)
         elif selected_page == "Qualidade":
-            page_qualidade_nps(df_filtered)
+            page_qualidade_nps(df_filtrado, df_nps_cidade_full, df_nps_prestador)
 
+
+# --- Execução Principal ---
 if __name__ == "__main__":
+    # Supondo que a função inject_css() é chamada aqui
+    # inject_css() 
     main()
