@@ -24,11 +24,11 @@ if 'logged_in' not in st.session_state:
 MIN_ATTENDANCES_FOR_RANKING = 1 # Contagem mínima de atendimentos para rankings de prestador/segmento/seguradora
 MIN_ATTENDANCES_FOR_CITY_ANALYSIS = 10 # Atendimentos mínimos padrão para análise de cidade em Capilaridade
 ALL_OPTION = "TODOS" # Constante para a opção "TODOS" nos filtros
-FINANCIAL_KPI_FILE = "https://github.com/vinikrebs/ScrorePrestador/blob/main/processed_financeiro.parquet"
-ATENDIMENTO_FILE_PATH = 'https://github.com/vinikrebs/ScrorePrestador/blob/main/processed_atendimentos.parquet'
-NPS_CIDADE_PATH = "https://github.com/vinikrebs/ScrorePrestador/blob/main/processed_nps_by_city.parquet"
-NPS_PRESTADOR_PATH = "https://github.com/vinikrebs/ScrorePrestador/blob/main/processed_nps_by_provider.parquet"
-LOGO_PATH = "https://github.com/vinikrebs/ScrorePrestador/blob/main/logo.png"
+FINANCIAL_KPI_FILE = "https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_financeiro.parquet"
+ATENDIMENTO_FILE_PATH = 'https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_atendimentos.parquet'
+NPS_CIDADE_PATH = "https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_nps_by_city.parquet"
+NPS_PRESTADOR_PATH = "https://github.com/vinikrebs/ScrorePrestador/raw/main/processed_nps_by_provider.parquet"
+LOGO_PATH = "https://github.com/vinikrebs/ScrorePrestador/raw/main/logo.png"
 
 # --- Função da Página de Login ---
 def login_page():
